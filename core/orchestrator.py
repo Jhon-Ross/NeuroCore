@@ -375,23 +375,17 @@ class OrquestradorNeuroCore:
         xp = 0
         if sucesso:
             xp = max(2, min(10, tokens // 100 + 3))
-            # Mapeia habilidade do roteamento -> chave RPG
-            mapa_rpg = {
-                "cortex_geral": "cortex_geral",
-                "codigo": "llm_code",
-                "sistema_operacional": "os_control",
-                "audicao": "stt_whisper",
-                "fonacao": "tts_xtts",
-                "visual": "image_flux",
-                "casa": "home_control",
-            }
-            rpg_habilidade = mapa_rpg.get(habilidade, "cortex_geral")
+            # IMPORTANTE: `habilidade_alvo` ja vem como ID valido de TipoHabilidade
+            # (cortex_geral / codigo / sistema_operacional / audicao / fonacao / visual / casa)
+            # entao NAO precisa de mapa — passar direto. Mapa anterior estava traduzindo
+            # para nomes de ESPECIALISTAS (llm_code, os_control) que nao sao
+            # habilidades validas no progress_rpg.py e causava ValueError XP perdido.
             try:
                 self.rpg.adicionar_xp(
-                    habilidade=rpg_habilidade,
+                    habilidade=habilidade,
                     quantidade=xp,
                     motivo=(
-                        f"Interação {habilidade} via orquestrador "
+                        f"Interacao {habilidade} via orquestrador "
                         f"(tokens={tokens}, tempo_ms={tempo_ms})"
                     ),
                 )
