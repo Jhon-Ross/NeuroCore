@@ -42,3 +42,10 @@ Thumbs.db
 # ----- Pasta pessoal de trabalho do TRAE / Obsidian (Não vai pro GitHub)
 .trae/
 .obsidian/
+
+# ----- Documentação ARBORESCENTE do autor (Não vai pro GitHub público)
+#        Nós mantemos localmente a arquitetura passo a passo, árvore do
+#        conhecimento, maratonas, diários e Wall of Wins. Quem baixar o
+#        código via GitHub recebe o CÓDIGO FONTE e arquitetura de alto
+#        nível no README — tudo mais cada um constrói o seu.
+docs/

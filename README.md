@@ -192,11 +192,11 @@ NeuroCore/ 🧠 (raiz código · SSD)
 │   ├── iniciar_prometeu.ps1                · Launcher 2 cliques (D1 = CLI · D4 = API+Next)
 │   └── parar_prometeu.ps1                  · Encerrador suave
 │
-├── docs/                               ← 📚 Árvore do Conhecimento (Obsidian)
-│   ├── 00 - Genese (RAIZ) · 01 - Ritual · 02 - Marathon 02/10
-│   ├── 03 - Diário YYYY-MM-DD · 04 - Design · 05 - Frontend/Tauri
-│   ├── 06 - Feitos e Marcos (Wall of Wins) · 07 - Template Diário
-│   ├── 08 - FAQ e Visão de Futuro · 09 - Arquitetura B2B Multi-Canal
+├── docs/                               ← 🔒 ARQUIVO PESSOAL · NÃO É PÚBLICO · STAYS LOCAL
+│                                        (Árvore do conhecimento do autor:
+│                                         arquitetura passo a passo, maratonas,
+│                                         diários de desenvolvimento, Wall of Wins.
+│                                         Quem baixar o código constrói a sua própria 👷)
 │
 ├── local_memory/                       ← Fallback sandbox / HDD G:\ indisponível
 │
