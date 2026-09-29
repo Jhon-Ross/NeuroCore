@@ -33,86 +33,6 @@ A visão de longo prazo:
 
 ---
 
-## ✨ Visão Geral da Arquitetura
-
-```mermaid
-flowchart TD
-    %%  ===== CORES E ESTILOS =====
-    classDef frontend fill:#15151E,stroke:#F59E0B,color:#F59E0B,stroke-width:2px;
-    classDef api fill:#1E1E29,stroke:#3B82F6,color:#E5E7EB,stroke-width:2px;
-    classDef core fill:#0D0D12,stroke:#F59E0B,color:#E5E7EB,stroke-width:3px;
-    classDef especialistas fill:#1F2937,stroke:#10B981,color:#E5E7EB,stroke-width:2px;
-    classDef dados fill:#2A2A38,stroke:#8B5CF6,color:#E5E7EB,stroke-width:2px;
-    classDef hardware fill:#3A1D05,stroke:#F59E0B,color:#FCD34D,stroke-width:2px;
-
-    U[👤 Jhon Ross] <-->|2 cliques .exe / navegador| N
-
-    subgraph FRONTEND [🏠 Camada 1 · Interface — Next.js 14 + Tauri v2]
-      N[🖥️ Next.js 14 · Layout 3 colunas FIXAS<br/><small>Sidebar · Chat Central · Painel RPG Direito</small>]
-      N <-->|WebSocket 1Hz| N2[📊 Sparklines CPU / RAM / VRAM / API]
-    end
-    class N,N2 frontend;
-
-    N <-->|HTTP + SSE streaming| API
-
-    subgraph API [🔗 Camada 2 · Comunicação — FastAPI]
-      API[FastAPI :8000<br/><small>REST + WebSocket · Comunicação cérebro ↔ UI</small>]
-    end
-    class API api;
-
-    API <--> O
-
-    subgraph NEUROCORE [🧠 Camada 3 · Núcleo — Python 3.12 · LangGraph Core]
-      O[🎼 Orquestrador LangGraph<br/><small>StateGraph · 3 nós permanentes:<br/>rotear → inferir → finalizar</small>]
-      O <-->|decide pra onde vai a mensagem| H[🔀 Hybrid Router<br/><small>Local Primeiro SEMPRE · Modo Teimoso D1</small>]
-      O <-->|salva sessões + XP| RPG[🎮 Sistema RPG Anti-Abandono<br/><small>LVL / XP / 7 Habilidades / Wall of Wins</small>]
-      O <-->|sparklines| VM[💾 VRAM Manager<br/><small>3600 snapshots / 1h</small>]
-    end
-    class O,H,RPG,VM core;
-
-    H <--> R
-
-    subgraph ESPECIALISTAS [🧩 7 Regiões Cerebrais do Prometeu · Classe Abstrata BaseSpecialist]
-      direction LR
-      R{{REGIOES_CEREBRAIS dispatch}}
-      R --- E1[🧠 Córtex Geral<br/>llm_core · Fase 1 ✅<br/><small>llama3 / 3.1 8B</small>]
-      R --- E2[⚡ Código<br/>llm_code · Fase 2]
-      R --- E3[👂 Audição<br/>stt_whisper · Fase 3]
-      R --- E4[🗣️ Fonação<br/>tts_xtts · Fase 3]
-      R --- E5[🖥️ S.O.<br/>os_control · Fase 2]
-      R --- E6[👁️ Visual<br/>image_flux · Fase 5]
-      R --- E7[🏠 Casa<br/>home_control · Fase 4]
-    end
-    class R,E1,E2,E3,E4,E5,E6,E7 especialistas;
-
-    subgraph DADOS [💾 Camada 4 · Persistência — 100% Local]
-      direction LR
-      SQL[(SQLite ACID WAL mode<br/>5 tabelas · RLock multi-thread)]
-      Q[(Qdrant Vetorial <br/>🟡 Semana 05/10 · Fase 2)]
-      L[📜 Logger JSON Lines<br/><small>YYYY-MM-DD.jsonl · thread-safe</small>]
-      F[📝 Feedback Store Ritual Diário<br/><small>7 tipos treinamento</small>]
-    end
-    class SQL,Q,L,F dados;
-
-    O <-->|histórico, preferências| SQL
-    RPG <-->|atomic write| SQL
-    F --- SQL
-    L --- O
-
-    subgraph HARDWARE [⚙️ Camada 0 · Meu Hardware]
-      HW[🖥️ Desktop Jhon<br/>Ryzen 5700X3D · 32GB DDR4<br/>AMD RX 7600 8GB DirectML<br/>SSD NeuroCore · HDD G: 90GB modelos + 10GB memória]
-      OL[📦 Ollama v0.3+<br/><small>Camada de inferência ÚNICA<br/>abstrai llama.cpp DirectML</small>]
-    end
-    class HW,OL hardware;
-
-    E1 <--> OL
-    E2 <--> OL
-    OL <-->|OLLAMA_MODELS=G:\models| HW
-    SQL <-->|G:\memory\sqlite_db| HW
-```
-
----
-
 ## 🧱 Stack Tecnológica (Escolhas Definitivas, NÃO PROVISÓRIAS)
 
 > 🧠 **Filosofia arquitetural:** NADA é jogado fora. Todas as decisões aqui são pensadas para durar 2+ anos. O que for "provisório" (ex: SQLite antes do Qdrant) é encapsulado por uma **classe abstrata Python ABC** — a troca não impacta NENHUMA outra linha de código.
@@ -293,36 +213,11 @@ G:\ (HDD 100GB dedicado)
 
 ---
 
-## 📚 Lições Aprendidas (Anti-Abandono + Arquitetura Sênior)
-
-Essas são as lições que levarei para todo projeto pessoal daqui pra frente:
-
-1. 🎮 **Risco #1 não é hardware, é EU ABANDONAR.**
-   Solução: sistema de RPG/XP/Wall of Wins **implementado ANTES do primeiro LLM.** Se eu não ver progresso tangível TODO dia, eu paro em 4 semanas.
-
-2. 🚫 **NENHUM if-else hardcoded para orquestração.**
-   Solução: LangGraph StateGraph. Muito mais fácil evoluir para 10 ferramentas sem virar macarrão.
-
-3. 🧩 **Tudo com interface ABC desde o dia 0.**
-   O custo de criar uma classe abstrata com 5 métodos é ZERO comparado ao custo de reescrever 7 especialistas depois por dívida técnica.
-
-4. ⚡ **AMD DirectML no Windows: Use Ollama, não tente reinventar.**
-   Llama-cpp-python DirectML compilando do source no Windows é 4h de dor. Ollama abstrai tudo e custa 3% de latência. Compensa.
-
-5. 🔒 **JSON é ótimo para log, PÉSSIMO para estado transacional.**
-   Troquei "JSON provisório para memória" do plano inicial por SQLite ACID WAL mode no primeiro dia. Meu eu do futuro agradece quando o Windows reiniciar no meio de uma escrita.
-
-6. 🎨 **Design System definido DIA 0 e NUNCA mais discutido.**
-   Preto (#07070A) + Âmbar (#F59E0B). Layout 3 colunas FIXAS. Chega de gastar 3 dias por mês com "vou mudar a cor do tema!".
-
-7. 🛞 **Next 14 LTS, não Next 15 bleeding-edge.**
-   shadcn/ui + React 19 quebram em setembro/2026. Economizei horas de dor ao forçar `create-next-app@14` e TailwindCSS 3.
-
----
-
 ## 🤝 Sobre mim · Jhon Ross
 
-Sou desenvolvedor apaixonado por **Inteligência Artificial Local**, arquitetura de agentes, FiveM e automação residencial. Meu objetivo com o NeuroCore é provar que você **NÃO precisa de servidores na nuvem, APIs caras e dados sendo vendidos para terceiros** pra ter uma IA pessoal incrivelmente útil.
+Engenheiro Fullstack apaixonado por construir tecnologia sólida, do design de arquitetura até o último pixel da interface. Meu foco é unir **engenharia de software** com **aplicações inteligentes** — desde sistemas críticos até projetos ambiciosos como o NeuroCore, onde exploro todo o potencial da tecnologia sem depender de terceiros.
+
+Acredito em software bem feito: bem documentado, com decisões arquiteturais conscientes, UX tratada como prioridade e zero atalhos que gerem dívida técnica a longo prazo. O NeuroCore é a prova desse mindset em constante evolução.
 
 - **🌐 GitHub:** [github.com/Jhon-Ross](https://github.com/Jhon-Ross)
 - **📁 Este projeto:** [Jhon-Ross/NeuroCore](https://github.com/Jhon-Ross/NeuroCore)
