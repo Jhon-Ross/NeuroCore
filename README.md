@@ -195,7 +195,7 @@ NeuroCore/ 🧠 (raiz código · SSD)
 ├── docs/                               ← 📚 Árvore do Conhecimento (Obsidian)
 │   ├── 00 - Genese (RAIZ) · 01 - Ritual · 02 - Marathon 02/10
 │   ├── 03 - Diário YYYY-MM-DD · 04 - Design · 05 - Frontend/Tauri
-│   ├── 06 - Feitos e Marcos (Wall of Wins) · 07 - Template Diário
+│   ├── 06 - Feitos e Marcos (Wall of Wins) · 07 - Template Diário · 08 - FAQ e Visão de Futuro
 │
 ├── local_memory/                       ← Fallback sandbox / HDD G:\ indisponível
 │
