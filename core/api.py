@@ -64,16 +64,19 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS: APENAS http://localhost:3000 (Next.js) no Dia 2
+# CORS: wildcard "*" no localhost (ambiente 100% local, sem rede externa).
+# Motivo: Tauri v2 WebView2 tem origens dinâmicas (tauri://localhost,
+# https://tauri.localhost, null, file:// etc.) que mudam por build. Com "*",
+# Next.js (http://localhost:3000), Navegador Preview, e Desktop Tauri
+# todos funcionam sem bloqueio de CORS no fetch() do navegador.
 # ---------------------------------------------------------------------------
 _CORS_ORIGINS: List[str] = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    "*",
 ]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=False,  # false quando allow_origins="*" (padrão CORS spec)
     allow_methods=["*"],
     allow_headers=["*"],
 )

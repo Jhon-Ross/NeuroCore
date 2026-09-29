@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
+import LauncherShell from "../components/LauncherShell";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -14,9 +15,9 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Prometeu · NeuroCore — Cérebro de IA Local",
+  title: "NeuroCore — Painel de Controle",
   description:
-    "Prometeu, cérebro de IA pessoal 100% local. 7 regiões cerebrais. AMD RX 7600.",
+    "Launcher Desktop NeuroCore/Prometeu: Ligar, Monitorar, Logs e Chat.",
 };
 
 export default function RootLayout({
@@ -25,11 +26,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR" className="dark">
+    <html lang="pt-BR" className="dark" suppressHydrationWarning>
       <body
+        suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-bg0 text-foreground selection:bg-accent selection:text-bg0`}
       >
-        {children}
+        <LauncherShell>{children}</LauncherShell>
       </body>
     </html>
   );

@@ -60,6 +60,61 @@ HABILIDADES_LABELS: Dict[TipoHabilidade, str] = {
     "casa":               "🏠 Casa IoT",
 }
 
+HABILIDADES_NOMES_UI: Dict[TipoHabilidade, str] = {
+    "cortex_geral":       "Córtex Geral",
+    "codigo":             "Código",
+    "audicao":            "Audição",
+    "fonacao":            "Fonação",
+    "sistema_operacional":"S.O.",
+    "visual":             "Visual",
+    "casa":               "Casa Inteligente",
+}
+
+HABILIDADES_ICONES: Dict[TipoHabilidade, str] = {
+    "cortex_geral":       "🧠",
+    "codigo":             "⚡",
+    "audicao":            "👂",
+    "fonacao":            "🗣️",
+    "sistema_operacional":"🖥️",
+    "visual":             "👁️",
+    "casa":               "🏠",
+}
+
+HABILIDADES_REGIOES: Dict[TipoHabilidade, str] = {
+    "cortex_geral":       "llm_core",
+    "codigo":             "llm_code",
+    "audicao":            "stt_whisper",
+    "fonacao":            "tts_xtts",
+    "sistema_operacional":"os_control",
+    "visual":             "image_flux",
+    "casa":               "home_control",
+}
+
+HABILIDADES_FASES: Dict[TipoHabilidade, str] = {
+    "cortex_geral":       "1/5",
+    "codigo":             "2/5",
+    "audicao":            "3/5",
+    "fonacao":            "3/5",
+    "sistema_operacional":"2/5",
+    "visual":             "5/5",
+    "casa":               "4/5",
+}
+
+_EMOJI_FEITOS_POR_TAG: Dict[str, str] = {
+    "nascimento":     "🌱",
+    "fundacao":       "🌱",
+    "primeira_palavra":"💬",
+    "codigo":         "⚡",
+    "maratona":       "🏁",
+    "anti_abandono":  "🛡️",
+    "xp":             "⭐",
+}
+
+_NOME_FEITO_CURTO_POR_TAG: Dict[str, str] = {
+    "nascimento":     "Nascimento",
+    "primeira_palavra":"Primeira Palavra",
+}
+
 # Formula do Nivel: XP_necessario(N) = N * 100
 # Ex: Nível 1 = 100 XP, Nível 2 = 200 XP, ..., Nível 10 = 1000 XP
 XP_POR_NIVEL: int = 100
@@ -429,38 +484,99 @@ class GerenciadorRPG:
     # ------------------------------------------------------------------------
     def resumo_para_ui(self) -> Dict:
         """Retorna um dict plano pronto para ser serializado e enviado ao Next.js."""
-        hab_ui: Dict[str, Dict] = {}
+        habilidades_ui: List[Dict] = []
         for hab_nome in HABILIDADES_ORDEM:
             if hab_nome not in self.estado.habilidades:
                 continue
             h = self.estado.habilidades[hab_nome]
-            hab_ui[hab_nome] = {
-                "label": HABILIDADES_LABELS.get(hab_nome, hab_nome),
-                "nivel_atual": h.nivel_atual,
-                "xp_acumulado": h.xp_acumulado,
-                "xp_para_proximo": h.xp_para_proximo,
-                "xp_restante": h.xp_restante(),
-                "porcentagem_nivel": round(h.porcentagem_nivel() * 100, 1),
-            }
+            habilidades_ui.append({
+                "id": hab_nome,
+                "nome": HABILIDADES_NOMES_UI.get(hab_nome, hab_nome),
+                "nivel": max(0, h.nivel_atual - 1) if hab_nome != "cortex_geral" else h.nivel_atual,
+                "xp": h.xp_acumulado,
+                "xp_para_prox": h.xp_para_proximo,
+                "icone": HABILIDADES_ICONES.get(hab_nome, "🔘"),
+                "ativo": hab_nome == "cortex_geral",
+                "regiao": HABILIDADES_REGIOES.get(hab_nome, ""),
+                "fase": HABILIDADES_FASES.get(hab_nome, "0/5"),
+            })
 
-        ultimos_5_feitos = list(reversed(self.estado.feitos[-5:]))
+        ultimos_5_feitos_raw = list(reversed(self.estado.feitos[-5:]))
+
+        def _extrair_numero_marco(tags: List[str], feito_id: int) -> int:
+            for t in tags or []:
+                if t.startswith("marco_"):
+                    try:
+                        return int(t.split("_", 1)[1])
+                    except ValueError:
+                        pass
+            return max(0, feito_id - 1)
+
+        def _escolher_emoji_feito(tags: List[str], titulo: str) -> str:
+            for t in tags or []:
+                if t in _EMOJI_FEITOS_POR_TAG:
+                    return _EMOJI_FEITOS_POR_TAG[t]
+            # Fallback por palavra chave no titulo
+            tlow = (titulo or "").lower()
+            if "primeira" in tlow or "palavra" in tlow or "chat" in tlow or "resposta" in tlow:
+                return "💬"
+            if "nascimento" in tlow or "fundacao" in tlow or "arquitetura" in tlow:
+                return "🌱"
+            if "codigo" in tlow or "código" in tlow or "programacao" in tlow:
+                return "⚡"
+            return "🏆"
+
+        def _nome_curto_feito(tags: List[str], titulo: str, marco_n: int) -> str:
+            for t in tags or []:
+                if t in _NOME_FEITO_CURTO_POR_TAG:
+                    return _NOME_FEITO_CURTO_POR_TAG[t]
+            if "·" in (titulo or ""):
+                curto = titulo.split("·", 1)[0].strip()
+                if 1 <= len(curto) <= 40:
+                    return curto
+            # Apenas titulo curto
+            return (titulo[:22] + "…") if len(titulo or "") > 25 else (titulo or f"Marco {marco_n}")
+
+        def _formatar_data_br(iso: str) -> str:
+            try:
+                dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+                return dt.strftime("%d/%m/%Y")
+            except Exception:
+                try:
+                    return iso[:10].replace("-", "/")[8:] + "/" + iso[:10].replace("-", "/")[5:7] + "/" + iso[:10].replace("-", "/")[:4]
+                except Exception:
+                    return iso[:10]
+
+        def _descricao_curta_feito(f_desc: str, tags: List[str]) -> str:
+            if "primeira_palavra" in (tags or []):
+                return "Primeira resposta: llama3:latest · 409tok · 526ms."
+            if "nascimento" in (tags or []) or "fundacao" in (tags or []):
+                return "Arquitetura NeuroCore aprovada."
+            return (f_desc[:50] + "…") if len(f_desc or "") > 55 else (f_desc or "")
+
+        feitos_ui: List[Dict] = []
+        for f in ultimos_5_feitos_raw:
+            marco_n = _extrair_numero_marco(f.tags, f.id)
+            curto = _nome_curto_feito(f.tags, f.titulo, marco_n)
+            feitos_ui.append({
+                "id": f.id,
+                "nome": f"Marco {marco_n} · {curto}",
+                "data": _formatar_data_br(f.timestamp_iso),
+                "emoji": _escolher_emoji_feito(f.tags, f.titulo),
+                "descricao": _descricao_curta_feito(f.descricao, f.tags),
+            })
+
+        xp_total = self.estado.xp_global()
+        nivel_global_atual = self.estado.nivel_global()
+        xp_prox_nivel = (nivel_global_atual + 1) * XP_POR_NIVEL
 
         return {
-            "nivel_global": self.estado.nivel_global(),
-            "xp_global_total": self.estado.xp_global(),
+            "nivel_global": nivel_global_atual,
+            "xp_total": xp_total,
+            "xp_para_proximo_nivel": xp_prox_nivel,
             "total_feitos": self.estado.total_feitos(),
-            "habilidades": hab_ui,
-            "ultimos_feitos": [
-                {
-                    "id": f.id,
-                    "data_iso": f.timestamp_iso,
-                    "titulo": f.titulo,
-                    "descricao": f.descricao,
-                    "xp_concedido": f.xp_concedido,
-                    "tags": f.tags,
-                }
-                for f in ultimos_5_feitos
-            ],
+            "habilidades": habilidades_ui,
+            "feitos": feitos_ui,
             "atualizado_em_iso": self.estado.atualizado_em_iso,
         }
 

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NeuroCore",
+  "version": "0.1.0",
+  "identifier": "io.neurocore.launcher",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NeuroCore — Painel",
+        "width": 1600,
+        "height": 960,
+        "minWidth": 1200,
+        "minHeight": 760,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": false,
+        "backgroundColor": "#07070A",
+        "shadow": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "app-inline-permissions",
+          "description": "Permissões inline dos plugins instalados",
+          "windows": ["main"],
+          "permissions": [
+            "notification:default",
+            "window-state:default",
+            "core:window:allow-minimize",
+            "core:window:allow-toggle-maximize",
+            "core:window:allow-close",
+            "core:window:allow-start-dragging"
+          ]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

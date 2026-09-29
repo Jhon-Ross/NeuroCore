@@ -1,0 +1,12 @@
+# ============================================================
+#  .gitignore — Tauri v2 + Rust (projeto src-tauri NeuroCore)
+# ============================================================
+
+# ----- Build artifacts Rust (NUNCA vai pro GitHub, reproduzível via cargo build)
+target/
+
+# ----- Bundles de release Tauri (.msi, .exe, .app, dmg, etc.)
+#        bundle.active = false permanente no nosso projeto; se alguém
+#        ativar no futuro, os binários gerados não devem subir.
+dist/
+gen/
