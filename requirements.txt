@@ -1,0 +1,40 @@
+# ============================================================================
+# NeuroCore / Prometeu — Dependências Permanentes
+# Arquitetura: Núcleo Python 3.12 + Especialistas + LangGraph Core
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# COLUNA VERTEBRAL — OBRIGATÓRIAS (nunca remover)
+# ----------------------------------------------------------------------------
+langgraph>=0.2.0              # Orquestrador state machine (pacote oficial = langgraph, NÃO usar LangChain)
+pydantic>=2.7.0                # Validação de esquemas e contratos
+aiofiles>=24.1.0               # I/O async para arquivos de log/memória
+psutil>=5.9.8                  # Monitoramento CPU/RAM para sinais vitais
+websockets>=12.0               # WebSocket p/ Next.js receber sinais vitais
+
+# ----------------------------------------------------------------------------
+# API E COMUNICAÇÃO
+# ----------------------------------------------------------------------------
+fastapi>=0.111.0               # API REST Core (para frontend conectar)
+uvicorn[standard]>=0.27.0      # Servidor ASGI
+ollama>=0.3.0                  # Cliente oficial Ollama (abstrai DirectML)
+
+# ----------------------------------------------------------------------------
+# MEMÓRIA E PERSISTÊNCIA
+# ----------------------------------------------------------------------------
+# SQLite é built-in no Python, mas usamos libs acessórias:
+pywin32>=306; sys_platform == 'win32'   # Registro Windows + integração SO
+
+# ----------------------------------------------------------------------------
+# ESPECIALISTAS (serão ativados por fase, mas deixamos no requirements)
+# Obs.: faster-whisper e TTS são pesados, pode instalar após maratona se quiser
+# ----------------------------------------------------------------------------
+# fases 2-3:
+# faster-whisper>=1.0.0         # STT Whisper CT2 (audição)
+# TTS>=0.22.0                    # Fonação Coqui XTTS v2 (voz)
+
+# ----------------------------------------------------------------------------
+# DEV E QUALIDADE (só ambiente dev)
+# ----------------------------------------------------------------------------
+# pytest>=8.0.0
+# ruff>=0.4.0

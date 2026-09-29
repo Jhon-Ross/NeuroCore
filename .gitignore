@@ -1,0 +1,44 @@
+# ============================================================
+#  .gitignore — NeuroCore / Prometeu Cérebro IA Local
+# ============================================================
+
+# ----- Ambiente Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# ----- Memória / Aprendizado (TRAE sandbox cai aqui temporariamente
+#   Fora da sandbox, os dados ficam em G:\memory\
+local_memory/
+
+# ----- Variáveis ambiente
+.env
+.env.local
+.env.*.local
+
+# ----- Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# ----- Logs e dumps
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+
+# ----- IDEs (opcional, não incomodar npx create-next-app
+.vscode/
+.idea/
+
+# ----- Pasta pessoal de trabalho do TRAE / Obsidian (Não vai pro GitHub)
+.trae/
+.obsidian/

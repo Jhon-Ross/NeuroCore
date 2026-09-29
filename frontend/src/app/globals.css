@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   GLOBAL — PROMETEU / NEUROCORE
+   Cor base SEMPRE dark. NÃO TEM modo light.
+   Cor fundo = PRETO #07070A
+   ============================================================ */
+:root {
+  --background: #07070A;
+  --foreground: #E5E7EB;
+}
+
+html, body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+  color-scheme: dark;
+}
+
+/* Scrollbar custom estilo Discord/Neon */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0D0D12; }
+::-webkit-scrollbar-thumb { background: #262637; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #F59E0B; }
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
