@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TypedDict
@@ -163,16 +164,98 @@ class OrquestradorNeuroCore:
     # NÓS DO GRAFO
     # ====================================================================
     def _node_rotear(self, estado: EstadoGrafo) -> Dict[str, Any]:
-        """Passo 1: Hybrid Router decide LOCAL vs API + qual modelo."""
-        habilidade = estado.get("habilidade_alvo") or "cortex_geral"
+        """
+        Passo 1: (a) heuristica HABILIDADE_ALVO por keywords, (b) Hybrid Router
+        decide LOCAL vs API + qual modelo local.
+        """
+        pergunta = estado.get("pergunta_usuario") or ""
+        habilidade_pedida = estado.get("habilidade_alvo") or "cortex_geral"
+
+        # 1a. Se usuário pediu "cortex_geral" (default), descobrimos a habilidade via keywords
+        #     (isso move a heurística do endpoint para DENTRO do core)
+        habilidade = self._resolver_habilidade_por_texto(pergunta, habilidade_pedida)
+
+        # Carrega lazy especialistas ainda não ativados (llm_code / os_control)
+        self._carregar_especialista_se_preciso(habilidade)
+
         decisao = self.router.decidir(habilidade_alvo=habilidade)
         return {
+            "habilidade_alvo": habilidade,
             "roteamento_destino": decisao.destino.value,
             "roteamento_modelo": decisao.modelo_usar,
         }
 
+    @staticmethod
+    def _resolver_habilidade_por_texto(pergunta: str, habilidade_padrao: str) -> str:
+        """
+        Heurística de roteamento DIA2 — keywords em PT-BR.
+        Depois podemos substituir por um classifier LLM pequeno.
+        """
+        if habilidade_padrao and habilidade_padrao != "cortex_geral":
+            return habilidade_padrao
+
+        p = (pergunta or "").lower().strip()
+        if not p:
+            return habilidade_padrao or "cortex_geral"
+
+        # ---- SISTEMA OPERACIONAL (detecção ANTES de código, evitar falso-positivo) ----
+        # Frases do tipo: [abre/inicia/roda o X ...] para programas conhecidos
+        if (re.match(r"^(abre|abrir|inicia|iniciar|start|executa|executar|roda)\b.*\b(notepad|bloco\s+de\s+notas|calculadora|calc|chrome|edge|vscode|vs\s+code|code|explorer|arquivos|terminal|cmd|powershell)\b", p)
+            or re.search(r"\b(notepad|bloco\s+de\s+notas|calculadora|calc|chrome|edge|vscode|vs\s+code|explorer|arquivos|terminal|cmd|powershell)\b.*(por\s+favor|pra\s+mim|pfv|pls|sff|por gentileza)", p)):
+            return "sistema_operacional"
+
+        keywords_so = [
+            "abre notepad", "abrir notepad", "abre bloco", "abrir bloco",
+            "abre calculadora", "abrir calculadora", "abre calc",
+            "abre chrome", "abrir chrome", "abrir edge", "abre edge",
+            "abre vs code", "abrir vs code", "abre vscode", "abre code",
+            "abre explorer", "abre arquivos", "abre terminal", "abrir terminal",
+            "abre cmd", "abrir cmd", "abre powershell", "abrir powershell",
+            "cria arquivo", "criar arquivo", "escreve arquivo", "escrever arquivo",
+            "novo arquivo", "lista a pasta", "listar pasta",
+            "lista desktop", "lista documents", "lista projeto", "lista memoria",
+            "powershell:", "powershell :", "no powershell", "roda get-date", "ps:",
+            "abre program", "abrir program",
+        ]
+        if any(k in p for k in keywords_so):
+            return "sistema_operacional"
+
+        # ---- CÓDIGO ----
+        keywords_codigo = [
+            "codigo", "código", "codar", "escreve codigo", "escreva codigo",
+            "python", "typescript", "type script", "ts", "tsx", "jsx", "javascript",
+            "rust", "cargo", "função", "funcao",
+            "classe", "debug", "debugar", "api", "rest", "rota", "end point", "endpoint",
+            "comando sql", "query sql", "select from", "sql",
+            "shell script", "bash", "powershell script", "script",
+            "código python", "código rust", "programa",
+        ]
+        if any(k in p for k in keywords_codigo):
+            return "codigo"
+
+        return habilidade_padrao or "cortex_geral"
+
+    def _carregar_especialista_se_preciso(self, habilidade: str) -> None:
+        """Carrega on-demand os especialistas D2 (llm_code, os_control)."""
+        mapa = {
+            "codigo": "llm_code",
+            "sistema_operacional": "os_control",
+            "cortex_geral": "llm_core",
+        }
+        nome_esp = mapa.get(habilidade)
+        if not nome_esp:
+            return
+        esp = self._especialistas.get(nome_esp)
+        if esp and not esp.is_loaded():
+            try:
+                esp.load()
+                log.info("orquestrador_load_lazy_especialista", {"especialista": nome_esp})
+            except Exception as e:
+                log.warn("orquestrador_load_lazy_falhou",
+                         {"especialista": nome_esp, "erro": str(e)})
+
     def _node_inferir(self, estado: EstadoGrafo) -> Dict[str, Any]:
-        """Passo 2: chama o especialista via BaseSpecialist.infer()."""
+        """Passo 2: chama o especialista via BaseSpecialist.infer() com kwargs específicos."""
         t0 = time.perf_counter()
 
         habilidade = estado.get("habilidade_alvo") or "cortex_geral"
@@ -192,13 +275,46 @@ class OrquestradorNeuroCore:
         esp_nome = mapa_hab_especialista.get(habilidade, "llm_core")
         esp = self._especialistas[esp_nome]
 
-        # Se a especialidade ainda nao ta ativada, infer() retorna o erro bonitinho.
-        # Não tratamos especial — o BaseSpecialist já cuida.
-        kwargs: Dict[str, Any] = {
-            "prompt": pergunta,
-            "historico": hist,
-            "sistema": SYSTEM_PROMPT_PROMETEU,
-        }
+        # kwargs específicos por habilidade
+        kwargs: Dict[str, Any] = {}
+        if habilidade == "sistema_operacional":
+            kwargs["acao"] = pergunta
+            kwargs["prompt"] = pergunta
+            kwargs["historico"] = hist
+            # NÃO envia SYSTEM_PROMPT_PROMETEU p/ os_control — ele parseia a acao ele mesmo.
+        elif habilidade == "codigo":
+            kwargs["prompt"] = pergunta
+            kwargs["historico"] = hist
+            # System prompt próprio do llm_code já tem o prompt de código.
+            # Ainda passamos o Prometeu personality como system override se não houver outro.
+            kwargs["sistema"] = (
+                getattr(esp, "SYSTEM_PROMPT_PADRAO", None)
+                or SYSTEM_PROMPT_PROMETEU
+            )
+            # Tenta detectar linguagem pelo texto
+            p_lower = pergunta.lower()
+            if "python" in p_lower:
+                kwargs["linguagem"] = "python"
+            elif "typescript" in p_lower or "ts " in p_lower or ".ts" in p_lower or "tsx" in p_lower:
+                kwargs["linguagem"] = "typescript"
+            elif "javascript" in p_lower or "js " in p_lower or ".js" in p_lower:
+                kwargs["linguagem"] = "javascript"
+            elif "rust" in p_lower or "cargo" in p_lower or "rs" in p_lower:
+                kwargs["linguagem"] = "rust"
+            elif "sql" in p_lower:
+                kwargs["linguagem"] = "sql"
+        else:
+            # Córtex geral + futuros
+            kwargs["prompt"] = pergunta
+            kwargs["historico"] = hist
+            kwargs["sistema"] = SYSTEM_PROMPT_PROMETEU
+
+        # Garante load (fallback final)
+        if not esp.is_loaded():
+            try:
+                esp.load()
+            except Exception:
+                pass
 
         resultado: ResultadoInferencia = esp.infer(**kwargs)
         tempo_total = round((time.perf_counter() - t0) * 1000, 2)
@@ -214,13 +330,14 @@ class OrquestradorNeuroCore:
                 "modelo_usado": resultado.modelo_usado,
                 "metadados": resultado.metadados,
                 "timestamp_iso": resultado.timestamp_iso,
+                "especialista": esp_nome,
+                "habilidade": habilidade,
             },
             "resposta_texto": (
                 str(resultado.conteudo)
                 if resultado.sucesso
                 else (
-                    f"⚠️  Desculpe Jhon, não consegui responder agora.\n\n"
-                    f"**Motivo:** {resultado.erro_mensagem}"
+                    f"⚠️  {resultado.erro_mensagem or ('Não consegui responder agora, ' + habilidade + ' falhou.')}"
                 )
             ),
             "sucesso": resultado.sucesso,
@@ -228,12 +345,13 @@ class OrquestradorNeuroCore:
         }
 
     def _node_finalizar(self, estado: EstadoGrafo) -> Dict[str, Any]:
-        """Passo 3: grava historico no SQLite + XP por interacao bem-sucedida."""
+        """Passo 3: grava historico no SQLite + XP POR HABILIDADE (nao sempre cortex_geral)."""
         session_id = int(estado.get("session_id") or 0)
         sucesso = bool(estado.get("sucesso"))
         resposta_texto = estado.get("resposta_texto") or ""
         pergunta = estado.get("pergunta_usuario") or ""
         resultado = estado.get("resultado_inferencia") or {}
+        habilidade = estado.get("habilidade_alvo") or "cortex_geral"
 
         tokens = int((resultado or {}).get("tokens_usados") or 0)
         tempo_ms = int((resultado or {}).get("tempo_ms") or 0)
@@ -253,16 +371,27 @@ class OrquestradorNeuroCore:
             except Exception as e:
                 log.error("orquestrador_erro_gravar_historico", exception=e)
 
-        # 2. XP: se sucesso, +2 a +10 XP em cortex_geral (depende do tamanho)
+        # 2. XP: se sucesso, +2 a +10 XP NA HABILIDADE CORRETA (depende do tamanho)
         xp = 0
         if sucesso:
             xp = max(2, min(10, tokens // 100 + 3))
+            # Mapeia habilidade do roteamento -> chave RPG
+            mapa_rpg = {
+                "cortex_geral": "cortex_geral",
+                "codigo": "llm_code",
+                "sistema_operacional": "os_control",
+                "audicao": "stt_whisper",
+                "fonacao": "tts_xtts",
+                "visual": "image_flux",
+                "casa": "home_control",
+            }
+            rpg_habilidade = mapa_rpg.get(habilidade, "cortex_geral")
             try:
                 self.rpg.adicionar_xp(
-                    habilidade="cortex_geral",
+                    habilidade=rpg_habilidade,
                     quantidade=xp,
                     motivo=(
-                        f"Resposta de texto via Córtex Geral "
+                        f"Interação {habilidade} via orquestrador "
                         f"(tokens={tokens}, tempo_ms={tempo_ms})"
                     ),
                 )
@@ -271,6 +400,7 @@ class OrquestradorNeuroCore:
 
         log.info("orquestrador_mensagem_processada", {
             "sucesso": sucesso,
+            "habilidade": habilidade,
             "tokens": tokens,
             "tempo_ms": tempo_ms,
             "xp_ganho": xp,
@@ -328,6 +458,12 @@ class OrquestradorNeuroCore:
         # Roda o grafo
         final = self.grafo.invoke(estado_inicial)
 
+        habilidade_resolvida = (
+            final.get("habilidade_alvo")
+            or estado_inicial.get("habilidade_alvo")
+            or "cortex_geral"
+        )
+
         return {
             "session_id": session_id,
             "sucesso": final.get("sucesso", False),
@@ -335,8 +471,10 @@ class OrquestradorNeuroCore:
             "tempo_total_ms": final.get("tempo_total_ms", 0.0),
             "xp_ganho": final.get("xp_ganho", 0),
             "roteamento_destino": final.get("roteamento_destino"),
+            "habilidade_alvo": habilidade_resolvida,
             "modelo_usado": (final.get("resultado_inferencia") or {}).get("modelo_usado"),
             "tokens_usados": (final.get("resultado_inferencia") or {}).get("tokens_usados", 0),
+            "especialista": (final.get("resultado_inferencia") or {}).get("especialista"),
         }
 
     def obter_painel_status(self) -> Dict[str, Any]:
