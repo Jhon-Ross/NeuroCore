@@ -29,6 +29,7 @@ frontend/build/
 
 # ----- Logs e dumps
 *.log
+logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

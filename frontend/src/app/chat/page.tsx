@@ -83,6 +83,20 @@ export default function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modeloAtivo = ps.painel?.especialistas?.llm_core?.modelo ?? "llama3:latest";
+  const psApiOnlinePrevRef = useRef<boolean | null>(ps.apiOnline);
+
+  // TRIGGER GLOBAL: Sempre que a API FastAPI transicionar (null | false) → true
+  // (ou seja, "acabou de ficar ONLINE" — warm-up do Ligar Tudo terminou),
+  // incrementamos `recarregarHistorico` para a sidebar do ChatHistorySidebar,
+  // que roda seu `carregar()` no mount do seu useEffect.
+  // Isso resolve o BUG do Jhon: "só depois de fechar e abrir a aba que carrega".
+  useEffect(() => {
+    const prev = psApiOnlinePrevRef.current;
+    if (prev !== true && ps.apiOnline === true) {
+      setRecarregarHistorico((t) => (t || 0) + 1);
+    }
+    psApiOnlinePrevRef.current = ps.apiOnline;
+  }, [ps.apiOnline]);
 
   // Carrega mensagens de uma sessão existente do SQLite
   const carregarSessao = useCallback(async (id: number) => {
@@ -228,6 +242,7 @@ export default function ChatPage() {
             onSelecionarSessao={carregarSessao}
             onNovaSessao={iniciarNovaSessao}
             recarregarTrigger={recarregarHistorico}
+            apiOnline={ps.apiOnline}
           />
         )}
       </div>

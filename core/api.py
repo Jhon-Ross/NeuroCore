@@ -172,6 +172,41 @@ class CodeRunResponse(BaseModel):
     xp_ganho: int
 
 
+# ---------------------------------------------------------------------------
+# Schemas: Automação SO (OS Control) — Dia 3 Maratona 02/10
+# ---------------------------------------------------------------------------
+class OsExecuteRequest(BaseModel):
+    acao: str = Field(
+        ...,
+        min_length=2,
+        max_length=2000,
+        description=(
+            "Comando de automação em PT-BR natural. Exemplos: "
+            "'abre o notepad', "
+            "'cria arquivo lembrete.txt no desktop com Prometeu estava aqui', "
+            "'lista a pasta do projeto NeuroCore', "
+            "'no powershell: Get-Date'"
+        ),
+    )
+    forcar_simulacao: bool = Field(
+        default=False,
+        description=(
+            "Se True = só retorna o plano de ação, NÃO EXECUTA NADA no PC (seguro padrão). "
+            "Se False = executa real (whitelist de segurança ainda é aplicada)."
+        ),
+    )
+
+
+class OsExecuteResponse(BaseModel):
+    sucesso: bool
+    conteudo: str
+    tipo_acao_detectado: Optional[str] = None
+    modo_simulacao: bool
+    tempo_ms: float
+    erro_mensagem: Optional[str] = None
+    metadados: Dict[str, Any] = Field(default_factory=dict)
+
+
 # --- HISTÓRICO DE SESSÕES ---
 
 class SessaoItem(BaseModel):
@@ -451,6 +486,83 @@ async def api_code_run(req: CodeRunRequest) -> CodeRunResponse:
         xp_ganho=resultado["xp_ganho"],
     )
 
+
+# ---------------------------------------------------------------------------
+# ENDPOINT: Automação SO (OS Control) — Dia 3 Maratona 02/10
+# Roteia diretamente pro especialista os_control sem passar por LLM.
+# Whitelist de segurança do os_control SEMPRE é aplicada (100% do tempo).
+# ---------------------------------------------------------------------------
+@app.post("/api/os/execute", response_model=OsExecuteResponse)
+async def api_os_execute(req: OsExecuteRequest) -> OsExecuteResponse:
+    """
+    Executa uma ação de automação no Windows via especialista os_control.
+
+    Regras de SEGURANÇA (NUNCA removidas):
+      • Whitelist de PROGRAMAS_PERMITIDOS (notepad, chrome, vscode, calc, explorer, powershell, cmd)
+      • Whitelist de DIRETÓRIOS_PERMITIDOS_ESCRITA (Desktop, Documents, Downloads, temp, projeto, G:\\memory)
+      • NÃO permite criar .ps1/.bat/.cmd/.exe NUNCA (apenas em simulacao)
+      • NÃO permite comandos destrutivos: rm -rf, format, del /f, reg delete, shutdown, taskkill /f etc.
+      • Padrão: forcar_simulacao=True recomendado p/ frontends — só executa real se usuário confirmar.
+    """
+    t0 = time.perf_counter()
+    acao = req.acao.strip()
+    simulacao = bool(req.forcar_simulacao)
+
+    # 1. Instancia / carrega os_control (singleton lazy via orchestrator)
+    try:
+        orchestrator._carregar_especialista_se_preciso("sistema_operacional")
+        esp_os = orchestrator._especialistas["os_control"]
+        if not esp_os.is_loaded():
+            ok = esp_os.load()
+            if not ok:
+                raise RuntimeError(f"os_control não carregou: {esp_os._ultimo_erro}")
+    except Exception as e:
+        log.error("api_os_carregar_falhou", {"erro": str(e)[:200]}, exception=e)
+        raise HTTPException(status_code=500, detail=f"Falha ao inicializar os_control: {e}")
+
+    # 2. Detecta tipo de ação (p/ UI renderizar badge) — reutiliza a heurística do próprio especialista
+    tipo = getattr(esp_os, "_classificar_acao", lambda _: "desconhecido")(acao) or "desconhecido"
+
+    # 3. Executa em thread separada (os_control usa subprocess síncrono)
+    loop = asyncio.get_event_loop()
+    try:
+        resultado = await loop.run_in_executor(
+            None,
+            lambda: esp_os.infer(
+                acao=acao,
+                prompt=acao,
+                forcar_confirmacao=simulacao,
+            ),
+        )
+    except Exception as e:
+        log.error("api_os_execute_erro", {"acao": acao[:80], "simulacao": simulacao}, exception=e)
+        raise HTTPException(status_code=500, detail=f"Erro interno no os_control (veja logs): {e}")
+
+    tempo_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+    # 4. Se sucesso E NÃO simulacao, concede +2 XP na habilidade "automacao_os" (nova habilidade!)
+    xp_extra = 0
+    if resultado.sucesso and not simulacao:
+        try:
+            res_xp = orchestrator.rpg.adicionar_xp("automacao_os", 2, motivo=f"os_control: {acao[:60]}")
+            if res_xp and res_xp.get("sucesso"):
+                xp_extra = int(res_xp.get("xp_ganho", 0))
+                log.info("api_os_xp_concedido", {"xp": xp_extra, "tipo": tipo, "acao": acao[:60]})
+        except Exception as e:
+            log.warn("api_os_xp_falhou", {"erro": str(e)[:200]})
+
+    return OsExecuteResponse(
+        sucesso=bool(resultado.sucesso),
+        conteudo=str(resultado.conteudo or ""),
+        tipo_acao_detectado=tipo,
+        modo_simulacao=simulacao,
+        tempo_ms=tempo_ms,
+        erro_mensagem=resultado.erro_mensagem,
+        metadados={
+            **(resultado.metadados or {}),
+            "xp_ganho_automatico": xp_extra,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,10 @@ class EspecialistaLlmCode(BaseSpecialist):
         "4) Avisos de perigo primeiro (ex: 'AÇÃO DESTRUTIVA — confirme antes de rodar').\n"
         "5) Siga o estilo de código do NeuroCore: ABC, type hints, dataclasses, logs estruturados.\n"
         "6) Se não tiver certeza, diga 'Não sei, vamos confirmar' — invente nada.\n"
+        "7) COMPATIBILIDADE COM O CODE RUNNER LOCAL (Sandbox 1-Clique):\n"
+        "   - Evite usar funções bloqueantes como `input()` que esperam digitação manual no terminal.\n"
+        "   - SEMPRE forneça código auto-executável com casos de teste demonstrativos no final (ex: chamando as funções com valores de exemplo e exibindo os resultados via `print()`), para que o usuário veja a saída ao clicar em 'Executar'.\n"
+        "   - Se o usuário pedir um aplicativo interativo com botões ou visor (ex: calculadora, jogo, formulário), crie utilizando `tkinter` nativo do Python, com janelas e botões prontos para rodar no Windows.\n"
     )
 
     def __init__(self,

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 // ================================================================
 // COMPONENTE: ChatHistorySidebar
@@ -23,6 +23,11 @@ interface ChatHistorySidebarProps {
   onSelecionarSessao: (id: number) => void;
   onNovaSessao: () => void;
   recarregarTrigger?: number;
+  /** Estado da API vindo do hook usePainelStatus:
+   *   true  = API tá online e respondendo 200.
+   *   false = API definitivamente offline (já falhou 2+ vezes ou timeout).
+   *   null  = API ainda está "sondando / inicializando" (primeiros segundos do app). */
+  apiOnline?: boolean | null;
 }
 
 function formatarData(iso: string): string {
@@ -49,11 +54,13 @@ export function ChatHistorySidebar({
   onSelecionarSessao,
   onNovaSessao,
   recarregarTrigger = 0,
+  apiOnline = null,
 }: ChatHistorySidebarProps) {
   const [sessoes, setSessoes] = useState<SessaoItem[]>([]);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const isMountedRef = useRef(true);
+  const apiOnlinePrevRef = useRef<boolean | null>(apiOnline);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -64,18 +71,62 @@ export function ChatHistorySidebar({
       const dados = await r.json();
       if (isMountedRef.current) setSessoes(dados.sessoes ?? []);
     } catch (e: unknown) {
-      if (isMountedRef.current)
-        setErro(e instanceof Error ? e.message : "Erro ao buscar sessões");
+      if (!isMountedRef.current) return;
+      const msgBruta = e instanceof Error ? e.message : String(e ?? "Erro ao buscar sessões");
+      // Trata erros de "API ainda não ligou" / connection refused / DNS / Mixed Content etc
+      // de forma AMIGÁVEL (sem vermelho no 1º load e sem gritar 'Failed to fetch')
+      const ehFalhaConexaoInicial =
+        /Failed to fetch|NetworkError|request to .* failed|TypeError: fetch|ERR_CONNECTION_REFUSED|ECONNREFUSED|aborted|timeout|timed out/i.test(msgBruta) ||
+        msgBruta.toLowerCase().includes("load failed") ||
+        msgBruta.toLowerCase().includes("typeerror");
+      if (ehFalhaConexaoInicial) {
+        // NÃO marca erro VERMELHO se for apenas "API ainda inicializando".
+        // Mostra um texto amarelo/neutro NA ÁREA DA LISTA se não tiver sessoes.
+        setErro(null);
+      } else {
+        // Erro REAL (ex: HTTP 500 / 404)
+        setErro(msgBruta);
+      }
     } finally {
       if (isMountedRef.current) setCarregando(false);
     }
   }, []);
 
+  // (1) Carrega uma vez no mount + toda vez que recarregarTrigger mudar (usuario clicka atualizar)
   useEffect(() => {
     isMountedRef.current = true;
     carregar();
     return () => { isMountedRef.current = false; };
   }, [carregar, recarregarTrigger]);
+
+  // (2) TRIGGER IMPORTANTE: SEMPRE recarrega o histórico AUTOMATICAMENTE
+  //     quando a API transicionar de (null | false) → true.
+  //     Isto resolve o bug do print do Jhon: "Só depois de fechar e abrir de novo que carrega".
+  //     Antes, a sidebar era montada só uma vez e nunca mais tentava, mesmo quando a API subia.
+  useEffect(() => {
+    const prev = apiOnlinePrevRef.current;
+    if (prev !== true && apiOnline === true) {
+      // acabou de ficar ONLINE → força fetch agora
+      carregar();
+    }
+    apiOnlinePrevRef.current = apiOnline;
+  }, [apiOnline, carregar]);
+
+  // (3) RETRY INTELIGENTE ENQUANTO API ESTÁ INDEFINIDA (null = sondando inicial):
+  //     a cada 4s, tenta de novo carregar o histórico se ainda não temos sessoes
+  //     e ainda houve uma falha de conexão. Isso evita que o usuário precise
+  //     do "fechar e abrir aba" para sincronizar.
+  useEffect(() => {
+    if (apiOnline === true || sessoes.length > 0 || !!erro) {
+      // API já online / já temos dados / erro real → não fazer retry automático
+      return;
+    }
+    const timer = window.setInterval(() => {
+      if (!isMountedRef.current) return;
+      carregar();
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [apiOnline, sessoes.length, erro, carregar]);
 
   return (
     <div className="flex flex-col h-full w-full bg-[#06060C] border-r border-border1 select-none">
@@ -106,11 +157,40 @@ export function ChatHistorySidebar({
             ⚠️ {erro}
           </div>
         )}
-        {!carregando && !erro && sessoes.length === 0 && (
+        {!carregando && !erro && sessoes.length === 0 && apiOnline === true && (
           <div className="px-3 py-5 text-center text-muted text-[11px]">
             <div className="text-2xl mb-2 opacity-30">💬</div>
             <div>Nenhuma conversa ainda.</div>
             <div className="mt-1 opacity-70">Inicie um chat acima.</div>
+          </div>
+        )}
+        {!carregando && !erro && sessoes.length === 0 && apiOnline === false && (
+          <div className="px-3 py-5 text-center text-muted text-[11px]">
+            <div className="text-2xl mb-2 opacity-30">🔌</div>
+            <div>API FastAPI offline.</div>
+            <div className="mt-1 opacity-70">Clique em <b>Ligar Tudo</b> no Launcher.</div>
+            <button
+              onClick={carregar}
+              disabled={carregando}
+              className="mt-3 px-3 py-1 rounded-md border border-accent/40 text-accent text-[10.5px] hover:bg-accent/10 disabled:opacity-50"
+            >
+              ⟳ Tentar novamente
+            </button>
+          </div>
+        )}
+        {!carregando && !erro && sessoes.length === 0 && (apiOnline === null || apiOnline === undefined) && (
+          <div className="px-3 py-5 text-center text-[11px]">
+            <div className="text-2xl mb-2 opacity-60">⏳</div>
+            <div className="text-accent/80 font-medium">Aguardando API :8000 inicializar...</div>
+            <div className="mt-1 text-muted/70 opacity-80">Isso é normal enquanto o Launcher termina de ligar tudo.</div>
+            <div className="mt-1 text-muted/60 opacity-70">Atualiza automaticamente a cada 4 segundos.</div>
+            <button
+              onClick={carregar}
+              disabled={carregando}
+              className="mt-3 px-3 py-1 rounded-md border border-border1 text-muted text-[10.5px] hover:bg-bg2 disabled:opacity-50"
+            >
+              ⟳ Tentar agora
+            </button>
           </div>
         )}
         {sessoes.map((s) => {

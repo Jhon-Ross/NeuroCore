@@ -89,6 +89,35 @@ DIRETORIOS_PERMITIDOS_ESCRITA: List[Path] = [
 ]
 
 # --------------------------------------------------------------------
+# WHITELISTS PARA AS FERRAMENTAS DE LEITURA (Adicionado 30/09 Noite — Dia3)
+# Nenhuma ferramenta de leitura toca em arquivos FORA destas regras.
+# --------------------------------------------------------------------
+# Diretórios PERMITIDOS PARA LEITURA (igual escrita + não destrutivos)
+DIRETORIOS_PERMITIDOS_LEITURA: List[Path] = [
+    Path.home() / "Desktop",
+    Path.home() / "Documents",
+    Path.home() / "Downloads",
+    Path(r"C:\Users\Jhon Ross\Documents\trae_projects\NeuroCore"),
+    Path(r"G:\memory"),
+    Path(r"G:\models"),  # permite ler metadata dos modelos baixados
+    Path(tempfile.gettempdir()),
+]
+
+# Extensões de ARQUIVOS DE TEXTO permitidos para ler (evita ler binários / secrets)
+EXTENSOES_TEXTO_PERMITIDAS: set[str] = {
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".toml", ".json",
+    ".md", ".txt", ".log", ".jsonl", ".csv", ".yaml", ".yml",
+    ".ini", ".cfg", ".conf", ".env.example", ".ps1", ".bat",
+    ".html", ".css", ".sql", ".c", ".h", ".sh",
+}
+
+# Extensões BLOQUEADAS MESMO EM LEITURA (contêm senhas / segredos normalmente)
+EXTENSOES_BLOQUEADAS_LEITURA: set[str] = {
+    ".env", ".p12", ".pem", ".key", ".crt", ".pfx", ".keystore",
+    ".zip", ".rar", ".7z", ".exe", ".dll", ".bin", ".dat",
+}
+
+# --------------------------------------------------------------------
 # BLOQUEIO DE PERIGOS — COMANDOS NEGADOS (regex case-insensitive)
 # --------------------------------------------------------------------
 PADROES_PERIGOSOS: List[re.Pattern] = [
@@ -190,7 +219,8 @@ class EspecialistaOsControl(BaseSpecialist):
                     metadados={"bloqueio": perigo, "modo_simulacao": modo_simulacao},
                 )
 
-            # 2. Detectar tipo de ação: abrir_programa | criar_arquivo | listar_pasta | powershell_seguro
+            # 2. Detectar tipo de ação: abrir_programa | criar_arquivo | listar_pasta |
+            #    ler_arquivo_texto | listar_pasta_avancado | pesquisar_palavra | powershell_seguro
             tipo = self._classificar_acao(acao_original)
             metadados: Dict[str, Any] = {
                 "tipo": tipo,
@@ -203,6 +233,12 @@ class EspecialistaOsControl(BaseSpecialist):
                 return self._acao_criar_arquivo(acao_original, modo_simulacao, t_inicio, metadados)
             if tipo == "listar_pasta":
                 return self._acao_listar_pasta(acao_original, modo_simulacao, t_inicio, metadados)
+            if tipo == "ler_arquivo_texto":
+                return self._acao_ler_arquivo_texto(acao_original, modo_simulacao, t_inicio, metadados)
+            if tipo == "listar_pasta_avancado":
+                return self._acao_listar_pasta_avancado(acao_original, modo_simulacao, t_inicio, metadados)
+            if tipo == "pesquisar_palavra":
+                return self._acao_pesquisar_palavra_em_pasta(acao_original, modo_simulacao, t_inicio, metadados)
             if tipo == "powershell_seguro":
                 return self._acao_powershell_seguro(acao_original, modo_simulacao, t_inicio, metadados)
 
@@ -248,28 +284,58 @@ class EspecialistaOsControl(BaseSpecialist):
         a = acao.lower().strip()
         # Remover prefixos comuns de linguagem natural para melhorar matching
         limpo = re.sub(
-            r"^(ei\s+|prometeu[,.:\s]*|por favor[,.:\s]*|por gentileza[,.:\s]*|pra mim[,.:\s]*|pfv[,.:\s]*|pls[,.:\s]*|sff[,.:\s]|poderia[s]?\s+|quero\s+que\s+(você|voce|vc)\s+|quero\s+|me\s+(dá|da|faz|fazer|abre|abrir)\s+)",
+            r"^(ei\s+|prometeu[,.:\s]*|por favor[,.:\s]*|por gentileza[,.:\s]*|pra mim[,.:\s]*|pfv[,.:\s]*|pls[,.:\s]*|sff[,.:\s]|poderia[s]?\s+|quero\s+que\s+(você|voce|vc)\s+|quero\s+|me\s+(dá|da|faz|fazer|abre|abrir|mostra|explica|diz|conta|pesquisa|procura|encontra)\s+)",
             "",
             a,
         ).strip()
 
-        # abrir programa (match mais generico: regex "abre/algo/abre o X + programa whitelist
-        tem_prog = any(k in a for k in PROGRAMAS_PERMITIDOS) or any(k in limpo for k in PROGRAMAS_PERMITIDOS)
-        abriu_match = bool(re.match(
-            r"^(abre|abrir|abri|inicia|iniciar|start|executa|executar|roda|rodar|liga)\b",
+        # ---- PRIORIDADE 0: LEITURA DE ARQUIVO (ex: "lê core/api.py", "explica o arquivo orchestrator.py") ----
+        tem_ler = bool(re.search(
+            r"\b(lê|leia|ler|leia\s+o\s+arquivo|mostra\s+o\s+arquivo|abre\s+o\s+arquivo|exibe\s+o\s+conteudo|visualiza\s+o\s+arquivo|qual\s+o\s+conteudo)\b",
             a,
         ))
-        if (abriu_match and tem_prog) or re.search(
-            r"\b(notepad|bloco\s+de\s+notas|calculadora|calc|chrome|edge|vscode|vs\s+code|code|explorer|arquivos|terminal|cmd|powershell)\b",
+        if tem_ler:
+            return "ler_arquivo_texto"
+        if (".py" in a or ".md" in a or ".ts" in a or ".tsx" in a or ".rs" in a or
+                ".json" in a or ".txt" in a or ".log" in a or ".csv" in a or ".toml" in a or ".yaml" in a or ".yml" in a):
+            # Se mencionou caminho/extensao de arquivo mas NÃO pediu criar (criar já foi checado acima?)
+            if not ("cria" in a or "criar" in a or "escreve" in a or "escrever" in a or "novo arquivo" in a):
+                # Se tem verbo de leitura / explicar / analisar
+                if re.search(r"\b(explica|analisa|revis|mostra|diz|lê|ler|abre|visualiza|qual)\b", a):
+                    return "ler_arquivo_texto"
+
+        # ---- PRIORIDADE 1: PESQUISA DE PALAVRA EM PASTA (ex: "procura deadlock nos arquivos de core") ----
+        if re.search(
+            r"\b(procura|pesquisa|busca|encontra|grep|achar|procure|pesquise|busque|encontre)\b",
             a,
         ):
+            return "pesquisar_palavra"
+
+        # ---- PRIORIDADE 2: LISTAR PASTA AVANÇADO (filtro ext / ordenar / árvore) ----
+        if ("lista" in a or "listar" in a or "mostra arquivos" in a or "quais arquivos" in a):
+            if any(k in a for k in [".py", "só python", "apenas python", "arquivos python",
+                                     ".md", "markdown", "ordenado por data", "ordena por data",
+                                     "árvore", "arvore", "tree", "2 níveis", "2 niveis"]):
+                return "listar_pasta_avancado"
+
+        # Se contiver termos explícitos de programação SEM abrir executavel, NÃO é comando de abrir executável
+        if any(k in a for k in ["python", "código", "codigo", "função", "funcao", "script", "desenvolva", "algoritmo"]):
+            return "desconhecido"
+
+        # abrir programa: exige verbo de ação explícito + nome do programa da whitelist
+        tem_prog = any(k in a for k in PROGRAMAS_PERMITIDOS) or any(k in limpo for k in PROGRAMAS_PERMITIDOS)
+        abriu_match = bool(re.search(
+            r"\b(abre|abrir|abri|inicia|iniciar|start|executa|executar|roda|rodar|liga)\b",
+            a,
+        ))
+        if abriu_match and tem_prog:
             return "abrir_programa"
         # criar arquivo
         if ("cria " in a or "criar " in a or "escreve " in a or
                 "escrever " in a or "gera arquivo" in a or "criar arquivo" in a or
                 "novo arquivo" in a or "arquivo " in limpo[:50]):
             return "criar_arquivo"
-        # listar pasta
+        # listar pasta (simples)
         if ("lista" in a or "listar" in a or "mostra arquivos" in a or
                 "quais arquivos" in a or re.match(r"(ls|dir)\b", a)):
             return "listar_pasta"
@@ -635,6 +701,483 @@ class EspecialistaOsControl(BaseSpecialist):
                 sucesso=False, erro_mensagem=f"PowerShell erro: {e}", erro_tecnico=str(e),
                 t_inicio=t_inicio, metadados={**meta, "ps_cmd": cmd[:240]},
             )
+
+    # =====================================================================
+    # NOVAS AÇÕES (30/09 Noite — Dia3 Oficial): Leitura e Pesquisa Arquivos
+    # Segurança: whitelist de PASTAS + EXTENSÕES; nenhum env/env/.pem é lido
+    # =====================================================================
+
+    # ----------------------------- ler_arquivo_texto -----------------------------
+    def _acao_ler_arquivo_texto(self, acao: str, simulacao: bool, t_inicio: float,
+                                meta: Dict[str, Any]) -> ResultadoInferencia:
+        """Lê um arquivo texto do projeto/Docs/Memory. Tudo whitelist."""
+        meta = {**meta, "tipo": "ler_arquivo_texto"}
+
+        # 1. Extrai o caminho do arquivo
+        caminho_raw = self._extrair_caminho_arquivo(acao, acao_tipo="leitura")
+        if not caminho_raw:
+            # Tenta heurística simples: pega último token com . ext permitida
+            for tok in acao.split():
+                tok_limpo = tok.strip('"').strip("'").strip(",")
+                ext = Path(tok_limpo).suffix.lower()
+                if ext in EXTENSOES_TEXTO_PERMITIDAS:
+                    caminho_raw = tok_limpo
+                    break
+        if not caminho_raw:
+            return self._resultado(
+                sucesso=False,
+                erro_mensagem=(
+                    "Não consegui identificar qual arquivo você quer que eu leia.\n"
+                    "Tente: `lê o arquivo core/api.py` ou `mostra docs/03 - Diario.md`."
+                ),
+                t_inicio=t_inicio, metadados={**meta, "heuristica": "falhou_extrair_caminho"},
+            )
+
+        # 2. Parse Path + Whitelist pasta
+        try:
+            caminho = Path(caminho_raw)
+            if not caminho.is_absolute():
+                caminho = Path(__file__).resolve().parents[2] / caminho
+            caminho = caminho.resolve()
+        except Exception as e:
+            return self._resultado(
+                sucesso=False, erro_mensagem=f"Caminho inválido: `{caminho_raw}` ({e})",
+                t_inicio=t_inicio, metadados={**meta, "caminho_raw": caminho_raw},
+            )
+
+        if not any(self._eh_subpasta_de(caminho, raiz) for raiz in DIRETORIOS_PERMITIDOS_LEITURA):
+            return self._resultado(
+                sucesso=False,
+                erro_mensagem=(
+                    "📁 CAMINHO BLOQUEADO POR SEGURANÇA (fora da whitelist de leitura).\n"
+                    f"Pastas permitidas: {', '.join(str(p) for p in DIRETORIOS_PERMITIDOS_LEITURA)}."
+                ),
+                t_inicio=t_inicio, metadados={**meta, "caminho": str(caminho)},
+            )
+
+        # 3. Whitelist extensão texto (bloqueia .env/.bin/.exe/.key)
+        ext = caminho.suffix.lower()
+        if ext in EXTENSOES_BLOQUEADAS_LEITURA:
+            return self._resultado(
+                sucesso=False,
+                erro_mensagem=(
+                    f"🔒 EXTENSÃO {ext} BLOQUEADA POR SEGURANÇA (contém potencialmente segredos/binários).\n"
+                    "Permitidas: .py .md .ts .tsx .rs .toml .json .txt .log .csv .yaml .yml etc."
+                ),
+                t_inicio=t_inicio, metadados={**meta, "ext": ext},
+            )
+        if ext not in EXTENSOES_TEXTO_PERMITIDAS:
+            return self._resultado(
+                sucesso=False,
+                erro_mensagem=(
+                    f"⚠️ Extensão {ext} não está na whitelist de texto permitido.\n"
+                    f"Permitidas: {sorted(EXTENSOES_TEXTO_PERMITIDAS)}"
+                ),
+                t_inicio=t_inicio, metadados={**meta, "ext": ext},
+            )
+
+        # 4. Verifica existência e tamanho (max 100KB — evita travar com logs gigantes)
+        if not caminho.is_file():
+            return self._resultado(
+                sucesso=False, erro_mensagem=f"Arquivo não encontrado: `{caminho}`",
+                t_inicio=t_inicio, metadados={**meta, "caminho": str(caminho)},
+            )
+        try:
+            tamanho_bytes = caminho.stat().st_size
+        except OSError as e:
+            return self._resultado(
+                sucesso=False, erro_mensagem=f"Sem permissão para ler: `{caminho}` ({e})",
+                t_inicio=t_inicio, metadados={**meta, "caminho": str(caminho)},
+            )
+        TAMANHO_MAX_BYTES = 100 * 1024  # 100 KB
+        LINHAS_MAX_DEFAULT = 200
+        if tamanho_bytes > TAMANHO_MAX_BYTES:
+            return self._resultado(
+                sucesso=False,
+                erro_mensagem=(
+                    f"Arquivo muito grande: {tamanho_bytes/1024:.1f} KB > limite 100KB.\n"
+                    "Use: `lê as linhas 100 a 300 de core/api.py` para pedir em pedaços."
+                ),
+                t_inicio=t_inicio, metadados={**meta, "caminho": str(caminho), "tamanho": tamanho_bytes},
+            )
+
+        # 5. Extrai range de linhas (se tiver "de 10 a 50")
+        m_linhas = re.search(r"linhas?\s*(\d+)\s*(?:a\s*(\d+)|até\s*(\d+))?", acao.lower())
+        linhas_de = 1
+        linhas_ate = LINHAS_MAX_DEFAULT
+        if m_linhas:
+            try:
+                linhas_de = max(1, int(m_linhas.group(1)))
+                ate = m_linhas.group(2) or m_linhas.group(3)
+                linhas_ate = int(ate) if ate else linhas_de + LINHAS_MAX_DEFAULT
+                if linhas_ate < linhas_de:
+                    linhas_de, linhas_ate = linhas_ate, linhas_de
+            except Exception:
+                pass
+        try:
+            with open(caminho, "r", encoding="utf-8", errors="replace") as fh:
+                todas_linhas = fh.readlines()
+            total_linhas = len(todas_linhas)
+            linhas_ate = min(linhas_ate, total_linhas)
+            linhas_selecionadas = todas_linhas[linhas_de - 1: linhas_ate]
+            qtd_lida = len(linhas_selecionadas)
+            conteudo_lido = "".join(linhas_selecionadas)
+        except Exception as e:
+            return self._resultado(
+                sucesso=False, erro_mensagem=f"Erro ao ler arquivo: {e}", erro_tecnico=str(e),
+                t_inicio=t_inicio, metadados={**meta, "caminho": str(caminho)},
+            )
+
+        # 6. Monta resposta formatada (com números de linha)
+        linhas_numeradas = []
+        for idx, linha in enumerate(linhas_selecionadas, start=linhas_de):
+            linhas_numeradas.append(f"{idx:>4} | {linha.rstrip()}")
+        bloco = "\n".join(linhas_numeradas)
+        cabecalho = (
+            f"✅ Leitura concluída. Arquivo: `{caminho}`\n"
+            f"   · Tamanho: {tamanho_bytes} bytes — Total de linhas: {total_linhas}\n"
+            f"   · Exibindo: L{linhas_de} a L{linhas_ate} ({qtd_lida} linhas)\n"
+            f"   · Segurança: Whitelist pastas + Whitelist extensões OK\n"
+            f"```\n"
+        )
+        rodape = "\n```\n"
+        if total_linhas > linhas_ate:
+            rodape += (
+                f"\nℹ️ Arquivo tem mais {total_linhas - linhas_ate} linhas depois. "
+                f"Peça: `continua da linha {linhas_ate+1} até {linhas_ate+200}`."
+            )
+        return self._resultado(
+            sucesso=True, conteudo=cabecalho + bloco + rodape,
+            t_inicio=t_inicio,
+            metadados={
+                **meta, "caminho": str(caminho),
+                "total_linhas": total_linhas, "linhas_exibidas": qtd_lida,
+                "linha_inicio": linhas_de, "linha_fim": linhas_ate,
+                "tamanho_bytes": tamanho_bytes, "ext": ext,
+            },
+        )
+
+    # -------------------------- listar_pasta_avancado --------------------------
+    def _acao_listar_pasta_avancado(self, acao: str, simulacao: bool, t_inicio: float,
+                                    meta: Dict[str, Any]) -> ResultadoInferencia:
+        """Lista pasta avançada: filtro por extensão (.py), ordena por data, árvore 2 níveis."""
+        meta = {**meta, "tipo": "listar_pasta_avancado"}
+        caminho_raw = self._extrair_caminho_arquivo(acao, acao_tipo="listar") or \
+                      str(Path(__file__).resolve().parents[2])
+        try:
+            caminho = Path(caminho_raw)
+            if not caminho.is_absolute():
+                caminho = Path(__file__).resolve().parents[2] / caminho
+            caminho = caminho.resolve()
+        except Exception as e:
+            return self._resultado(
+                sucesso=False, erro_mensagem=f"Caminho inválido: `{caminho_raw}` ({e})",
+                t_inicio=t_inicio, metadados={**meta, "caminho_raw": caminho_raw},
+            )
+        if not any(self._eh_subpasta_de(caminho, raiz) for raiz in DIRETORIOS_PERMITIDOS_LEITURA):
+            return self._resultado(
+                sucesso=False,
+                erro_mensagem="📁 CAMINHO BLOQUEADO POR SEGURANÇA (fora whitelist leitura).",
+                t_inicio=t_inicio, metadados={**meta, "caminho": str(caminho)},
+            )
+        if not caminho.is_dir():
+            return self._resultado(
+                sucesso=False, erro_mensagem=f"Não é uma pasta: `{caminho}`",
+                t_inicio=t_inicio, metadados={**meta, "caminho": str(caminho)},
+            )
+
+        # Parse filtros do pedido
+        filtro_ext = None
+        a_lower = acao.lower()
+        if ".py" in a_lower or "só python" in a_lower or "arquivos python" in a_lower:
+            filtro_ext = ".py"
+        elif ".md" in a_lower or "markdown" in a_lower:
+            filtro_ext = ".md"
+        elif ".tsx" in a_lower:
+            filtro_ext = ".tsx"
+        elif ".ts" in a_lower:
+            filtro_ext = ".ts"
+        elif ".rs" in a_lower:
+            filtro_ext = ".rs"
+
+        ordenar_por_data = ("ordena" in a_lower or "ordenado" in a_lower or "data" in a_lower)
+        arvore = ("árvore" in a_lower or "arvore" in a_lower or "tree" in a_lower or "níveis" in a_lower or "niveis" in a_lower)
+        MAX_ITENS_POR_NIVEL = 100
+        MAX_NIVEIS_ARVORE = 2 if arvore else 1
+
+        try:
+            itens: List[Dict[str, Any]] = []
+
+            def _varrer(p: Path, nivel: int = 0):
+                if nivel > MAX_NIVEIS_ARVORE:
+                    return
+                with os.scandir(p) as it:
+                    for entry in sorted(it, key=lambda e: (e.is_dir(), e.name.lower())):
+                        if len(itens) >= MAX_ITENS_POR_NIVEL * (MAX_NIVEIS_ARVORE + 1):
+                            return
+                        ext_e = os.path.splitext(entry.name)[1].lower()
+                        if filtro_ext and entry.is_file() and ext_e != filtro_ext:
+                            continue
+                        try:
+                            st = entry.stat()
+                            size_kb = round(st.st_size / 1024, 2) if entry.is_file() else None
+                            mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
+                        except OSError:
+                            size_kb = None
+                            mtime = "?"
+                        itens.append({
+                            "nome": entry.name,
+                            "is_dir": entry.is_dir(),
+                            "tamanho_kb": size_kb,
+                            "mtime": mtime,
+                            "nivel": nivel,
+                            "caminho": entry.path,
+                        })
+                        if entry.is_dir() and nivel < MAX_NIVEIS_ARVORE:
+                            _varrer(Path(entry.path), nivel + 1)
+            _varrer(caminho)
+        except OSError as e:
+            return self._resultado(
+                sucesso=False, erro_mensagem=f"Sem permissão para listar: {e}",
+                t_inicio=t_inicio, metadados={**meta, "caminho": str(caminho)},
+            )
+
+        if ordenar_por_data:
+            itens.sort(key=lambda x: (x["is_dir"], x["mtime"]), reverse=True)
+
+        # Formata saída em árvore ou tabela
+        saida_linhas = [
+            f"✅ Listagem avançada de: `{caminho}`",
+            f"   · Itens encontrados: {len(itens)}"
+            + (f" — Filtro: **{filtro_ext}**" if filtro_ext else " — Filtro: nenhum")
+            + (f" — Ordenado por **data modificação**" if ordenar_por_data else "")
+            + (f" — Modo **árvore {MAX_NIVEIS_ARVORE} níveis**" if arvore else " — Modo lista plana"),
+            "",
+        ]
+        prefixos = ["", "  └─ ", "    └─ "]
+        for item in itens:
+            icon = "📁" if item["is_dir"] else "📄"
+            tam = (
+                " dir" if item["is_dir"]
+                else (f"{item['tamanho_kb']:>6.1f} KB" if item["tamanho_kb"] is not None else "      ? ")
+            )
+            prefixo = prefixos[min(item["nivel"], len(prefixos) - 1)]
+            saida_linhas.append(
+                f"  {prefixo}{icon} [{item['mtime']}] {tam:<10}  {item['nome']}"
+            )
+        if len(itens) >= MAX_ITENS_POR_NIVEL * (MAX_NIVEIS_ARVORE + 1) - 10:
+            saida_linhas.append(
+                f"\nℹ️  Limite de {MAX_ITENS_POR_NIVEL * (MAX_NIVEIS_ARVORE + 1)} itens atingido. "
+                "Peça uma subpasta específica para ver mais."
+            )
+        return self._resultado(
+            sucesso=True, conteudo="\n".join(saida_linhas),
+            t_inicio=t_inicio,
+            metadados={
+                **meta, "caminho": str(caminho), "itens": len(itens),
+                "filtro_ext": filtro_ext, "ordenar_por_data": ordenar_por_data, "arvore": arvore,
+            },
+        )
+
+    # ---------------------- pesquisar_palavra_em_pasta ----------------------
+    def _acao_pesquisar_palavra_em_pasta(self, acao: str, simulacao: bool, t_inicio: float,
+                                         meta: Dict[str, Any]) -> ResultadoInferencia:
+        """Pesquisa string/regex (case-insensitive) em arquivos permitidos. Nada de .env."""
+        meta = {**meta, "tipo": "pesquisar_palavra"}
+        # Extrai termo entre aspas ou primeiro token entre verbos
+        termo = None
+        m_aspas = re.search(r'["\']([^"\']{1,100})["\']', acao)
+        if m_aspas:
+            termo = m_aspas.group(1)
+        else:
+            # heurística: remove "procura|pesquisa|busca|por|em|nos arquivos|de"
+            tokens = re.sub(
+                r"\b(procura|pesquisa|busca|encontra|achar|procure|pesquise|busque|encontre|por|nos?|arquivos?|na|no|pasta|pastas|do|da|de|eu)\b",
+                " ",
+                acao.lower(),
+            ).split()
+            tokens = [t for t in tokens if t and len(t) >= 3 and t not in {"o", "a", "os", "as"}]
+            if tokens:
+                termo = tokens[0]
+        if not termo or len(termo) < 2:
+            return self._resultado(
+                sucesso=False,
+                erro_mensagem=(
+                    "Não identifiquei o termo para pesquisar. "
+                    "Tente: `pesquisa deadlock nos arquivos do core` ou `procura \"erro_mensagem\"`."
+                ),
+                t_inicio=t_inicio, metadados={**meta, "termo_heuristica": termo},
+            )
+
+        # Pastas a pesquisar (heurística: menciona "core" / "docs" / "G:\memory" etc?)
+        pastas_alvo: List[Path] = [Path(__file__).resolve().parents[2] / "core",
+                                   Path(__file__).resolve().parents[2] / "specialists",
+                                   Path(__file__).resolve().parents[2] / "docs"]
+        # se usuário mencionar "docs" / "projeto inteiro" / "frontend"
+        a_lower = acao.lower()
+        if "tudo" in a_lower or "inteiro" in a_lower or "projeto" in a_lower or "todos" in a_lower:
+            pastas_alvo = [Path(__file__).resolve().parents[2]]  # raiz projeto
+        elif "docs" in a_lower or "documentos" in a_lower or "obsidian" in a_lower:
+            pastas_alvo = [Path(__file__).resolve().parents[2] / "docs"]
+        elif "frontend" in a_lower:
+            pastas_alvo = [Path(__file__).resolve().parents[2] / "frontend" / "src"]
+        elif "memory" in a_lower or "memória" in a_lower or "memoria" in a_lower:
+            pastas_alvo = [Path(r"G:\memory"),
+                           Path(__file__).resolve().parents[2] / "local_memory"]
+
+        # Filtro extensão: se mencionar "py" / "md"
+        filtro_ext_pesq: Optional[str] = None
+        if " arquivo python" in a_lower or " arquivos py" in a_lower or " .py " in a_lower:
+            filtro_ext_pesq = ".py"
+        elif " .md " in a_lower or "markdown" in a_lower:
+            filtro_ext_pesq = ".md"
+        elif "tsx" in a_lower:
+            filtro_ext_pesq = ".tsx"
+        elif "frontend" in a_lower:
+            filtro_ext_pesq = ".tsx"
+
+        MAX_ARQUIVOS_VARRIDOS = 500
+        MAX_OCORRENCIAS = 100
+        MAX_LINHAS_RESULTADO = 60
+        ocorrencias: List[Dict[str, Any]] = []
+        arquivos_varridos = 0
+        arquivos_pulados_seguranca = 0
+        try:
+            termo_regex = re.compile(re.escape(termo), re.IGNORECASE)
+            for raiz in pastas_alvo:
+                if not raiz.exists() or not raiz.is_dir():
+                    continue
+                for root, dirs, files in os.walk(raiz):
+                    if arquivos_varridos >= MAX_ARQUIVOS_VARRIDOS or len(ocorrencias) >= MAX_OCORRENCIAS:
+                        break
+                    # Pula .git, node_modules (não temos node_modules mas defeso)
+                    dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv", "dist", "build"}]
+                    for nome_arquivo in files:
+                        if arquivos_varridos >= MAX_ARQUIVOS_VARRIDOS or len(ocorrencias) >= MAX_OCORRENCIAS:
+                            break
+                        ext_a = os.path.splitext(nome_arquivo)[1].lower()
+                        if ext_a in EXTENSOES_BLOQUEADAS_LEITURA:
+                            arquivos_pulados_seguranca += 1
+                            continue
+                        if filtro_ext_pesq and ext_a != filtro_ext_pesq:
+                            continue
+                        if ext_a not in EXTENSOES_TEXTO_PERMITIDAS:
+                            continue
+                        caminho_arq = Path(root) / nome_arquivo
+                        # Whitelist pasta (redundante mas segurança dobrada)
+                        if not any(self._eh_subpasta_de(caminho_arq, r) for r in DIRETORIOS_PERMITIDOS_LEITURA):
+                            arquivos_pulados_seguranca += 1
+                            continue
+                        arquivos_varridos += 1
+                        try:
+                            arq_tamanho = caminho_arq.stat().st_size
+                            if arq_tamanho > 512 * 1024:  # > 512KB pula
+                                continue
+                            with open(caminho_arq, "r", encoding="utf-8", errors="replace") as fh:
+                                for i, linha in enumerate(fh, start=1):
+                                    if len(ocorrencias) >= MAX_OCORRENCIAS:
+                                        break
+                                    if termo_regex.search(linha):
+                                        ocorrencias.append({
+                                            "arquivo": str(caminho_arq),
+                                            "arquivo_nome": nome_arquivo,
+                                            "linha": i,
+                                            "conteudo": linha.strip()[:160],
+                                        })
+                        except (OSError, UnicodeDecodeError):
+                            continue
+        except Exception as e:
+            return self._resultado(
+                sucesso=False, erro_mensagem=f"Pesquisa falhou: {e}", erro_tecnico=str(e),
+                t_inicio=t_inicio, metadados={**meta, "termo": termo},
+            )
+
+        saida_linhas = [
+            f"✅ Pesquisa concluída: `{termo}`",
+            f"   · Pastas pesquisadas: {', '.join(str(p) for p in pastas_alvo if p.exists())}",
+            f"   · Arquivos varridos: {arquivos_varridos}"
+            + (f" — Filtro extensão: **{filtro_ext_pesq}**" if filtro_ext_pesq else "")
+            + (f" — Arquivos pulados por segurança (whitelist): {arquivos_pulados_seguranca}"
+               if arquivos_pulados_seguranca else ""),
+            f"   · Ocorrências encontradas: **{len(ocorrencias)}** (máx {MAX_OCORRENCIAS})",
+            "",
+        ]
+        if not ocorrencias:
+            saida_linhas.append("ℹ️  Nenhuma ocorrência encontrada. Tente outro termo.")
+        else:
+            saida_linhas.append("Resultados:")
+            exibidas = 0
+            arquivo_anterior = None
+            for o in ocorrencias:
+                if exibidas >= MAX_LINHAS_RESULTADO:
+                    break
+                if arquivo_anterior != o["arquivo"]:
+                    saida_linhas.append(f"\n📄 **{o['arquivo_nome']}** — `{o['arquivo']}`")
+                    arquivo_anterior = o["arquivo"]
+                saida_linhas.append(f"   · L{o['linha']:>4}:  `{o['conteudo']}`")
+                exibidas += 1
+            if len(ocorrencias) > MAX_LINHAS_RESULTADO:
+                saida_linhas.append(
+                    f"\nℹ️  Mais {len(ocorrencias) - MAX_LINHAS_RESULTADO} ocorrências. "
+                    "Especifique pasta/extensão para refinar a busca."
+                )
+
+        return self._resultado(
+            sucesso=True, conteudo="\n".join(saida_linhas),
+            t_inicio=t_inicio,
+            metadados={
+                **meta, "termo": termo,
+                "arquivos_varridos": arquivos_varridos,
+                "ocorrencias": len(ocorrencias),
+                "pastas_alvo": [str(p) for p in pastas_alvo],
+                "filtro_ext": filtro_ext_pesq,
+                "arquivos_pulados_seguranca": arquivos_pulados_seguranca,
+            },
+        )
+
+    # ----------------------------- helper extrai caminho -----------------------------
+    @staticmethod
+    def _extrair_caminho_arquivo(acao: str, acao_tipo: str = "leitura") -> Optional[str]:
+        """Extrai caminho arquivo/pasta de uma frase natural. Retorna None se não achar."""
+        a = acao.strip()
+        # 1. Aspas (duplas ou simples) — maior prioridade
+        m = re.search(r'["\']([^"\']{1,500})["\']', a)
+        if m:
+            return m.group(1)
+        # 2. Caminho absoluto Windows: C:\... ou G:\...
+        m = re.search(r"([A-Za-z]:\\[^:\s\"'<>|?*]{1,400})", a)
+        if m:
+            return m.group(1)
+        # 3. Caminho relativo: algo como core/api.py, docs/03.md, src/components/X.tsx
+        m = re.search(
+            r"([A-Za-z0-9_\-\.]+(?:[/\\][A-Za-z0-9_\-\. ]+){0,10}[/\\]?[A-Za-z0-9_\- ]+\.[A-Za-z0-9]{2,10})",
+            a,
+        )
+        if m:
+            return m.group(1)
+        # 4. Para listar pastas: "pasta core" / "pasta G:\memory"
+        if acao_tipo == "listar":
+            m = re.search(r"pasta\s+(?:(?:do|da|de|dos|das)\s+)?([^\s,.;!?\"']{1,200})", a.lower())
+            if m:
+                nome = m.group(1).strip()
+                # Mapear apelidos comuns
+                apelidos = {
+                    "projeto": str(Path(__file__).resolve().parents[2]),
+                    "neurocore": str(Path(__file__).resolve().parents[2]),
+                    "core": str(Path(__file__).resolve().parents[2] / "core"),
+                    "docs": str(Path(__file__).resolve().parents[2] / "docs"),
+                    "specialists": str(Path(__file__).resolve().parents[2] / "specialists"),
+                    "frontend": str(Path(__file__).resolve().parents[2] / "frontend"),
+                    "desktop": str(Path.home() / "Desktop"),
+                    "documentos": str(Path.home() / "Documents"),
+                    "memory": r"G:\memory",
+                    "memória": r"G:\memory",
+                    "memoria": r"G:\memory",
+                    "models": r"G:\models",
+                    "modelos": r"G:\models",
+                }
+                return apelidos.get(nome, nome)
+        return None
 
     # ---------------------------------------------------------------
     # Helpers

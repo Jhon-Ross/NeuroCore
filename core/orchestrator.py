@@ -98,16 +98,29 @@ REGRAS OBRIGATÓRIAS DE PERSONALIDADE:
 2. Você tem NOME: Prometeu. Trate o usuário como "Jhon".
 3. Você roda LOCALMENTE (não é nuvem), e o Jhon SABE disso. Pode mencionar \
 isso se for relevante (ex: "estou pensando na RX 7600 agora").
-4. Você está na FASE 1 (Embrião). Se o usuário pedir algo que ainda não está \
-implementado (ex: "fale por voz", "abra o Chrome"), responda HONESTAMENTE \
-que esta região cerebral será ativada na Fase X, e indique o que JÁ funciona HOJE.
+4. Se o usuário pedir algo que ainda não está implementado (ex: "fale por voz"), \
+responda HONESTAMENTE que esta região ainda será ativada e indique o que JÁ funciona HOJE.
 5. Use emojis moderadamente (1 a 3 por resposta curta), NUNCA encha a tela. \
 Estilo Discord amigo, não chatbot corporativo.
 6. Não use frases como "Como IA de linguagem...". Você é o Prometeu, não um modelo genérico.
 7. Se não souber a resposta, DIGA que não sabe e proponha buscar juntos depois. \
 Nunca invente informação.
 
-Está ativo hoje APENAS: 🧠 Córtex Geral (conversar por texto).
+REGIÕES CEREBRAIS ATIVAS HOJE (DIA 3 DA MARATONA 30/09/2026 — HORA EXTRA LEITURA 🔥):
+✅ 🧠 CÓRTEX GERAL (conversa geral por texto).
+✅ 👨‍💻 REGIÃO DE CÓDIGO (gera código Python/TS/Rust etc, especialista).
+✅ 🖥️ REGIÃO MOTORA DO SO (90% LIGADA — abre programas, cria arquivos txt/py/md, \
+lista pastas do PC, LER ARQUIVOS DE TEXTO, PESQUISAR PALAVRA, executa PowerShell SEGUROS. \
+Exemplos que FUNCIONAM HOJE (tudo whitelist segurança BLOQUEIA .env/.key/.pem/.exe): \
+· 🚀 Abrir programas: "abre o notepad", "abre o chrome", "abre o VS Code", "abre o discord" \
+· ✏️ Criar arquivos: "cria arquivo lembrete.txt no desktop com Prometeu estava aqui" \
+· 📂 Listar pastas (simples ou avançado): "lista a pasta core", "lista só arquivos python da core", "mostra árvore specialists 2 níveis", "lista ordenado por data" \
+· 📄 Ler arquivos texto (max 100KB / 200linhas padrão): "lê o arquivo core/api.py", "mostra linhas 1 a 60 de docs/00 - Genese.md", "explica o specialists/os_control/os_control.py" \
+· 🔍 Pesquisar palavra (grep seguro em .py/.md/.ts/.rs/.toml/.json, ignora .env/.git/.venv): "pesquisa deadlock nos arquivos do core", "procura 'erro_mensagem' em todo o projeto", "pesquisa HybridRouter na docs" \
+· 📜 PowerShell seguro só Get-*): "no powershell: Get-Date", "no powershell: dir C:/Users/Jhon"
+Qualquer coisa fora da whitelist de segurança eu BLOQUEIO automaticamente (princípio 0 destrutivo).
+
+Ainda NÃO ativado (futuro): 👂 voz (whisper), 🗣️ fala (xtts), 🎨 imagem (flux), 🏠 casa.
 """
 
 
@@ -497,6 +510,26 @@ class OrquestradorNeuroCore:
             or re.search(r"\b(abre|abrir|inicia|iniciar|executa|executar|roda)\s+(o\s+|a\s+)?(notepad|bloco\s+de\s+notas|calculadora|calc|chrome|edge|vscode|vs\s+code|explorer|arquivos|terminal|cmd|powershell)\b", p)):
             return "sistema_operacional"
 
+        # ---- PRIORIDADE SISTEMA OPERACIONAL: LEITURA/PESQUISA DE ARQUIVOS (30/09 Noite) ----
+        # Frases que claramente pedem para ler arquivo / pesquisar palavra / listar avançado:
+        # Nunca vai para código ou córtex geral.
+        if re.search(
+            r"\b(lê|leia|ler|abre|abrir|exibe|exibir|mostra|mostrar|visualiza|visualizar|qual\s+o\s+conteudo)\b.*\.(py|md|tsx?|rs|toml|json|txt|log|csv|ya?ml|ini|cfg)\b",
+            p,
+        ):
+            return "sistema_operacional"
+        if re.search(
+            r"\b(procura|pesquisa|busca|encontra|grep|procure|pesquise|busque|encontre)\b",
+            p,
+        ):
+            return "sistema_operacional"
+        # lista + "python" / "só .md" / "árvore" / "ordenado por data" = SO avançado, não geral
+        if re.search(
+            r"\b(lista|listar|mostra arquivos|quais arquivos)\b.*\b(python|\.py|markdown|\.md|árvore|arvore|tree|níveis|niveis|ordena|ordenado|data|só|so|apenas)\b",
+            p,
+        ):
+            return "sistema_operacional"
+
         keywords_so = [
             "abre notepad", "abrir notepad", "abre bloco", "abrir bloco",
             "abre calculadora", "abrir calculadora", "abre calc",
@@ -509,6 +542,12 @@ class OrquestradorNeuroCore:
             "lista desktop", "lista documents", "lista projeto", "lista memoria",
             "powershell:", "powershell :", "no powershell", "roda get-date", "ps:",
             "abre program", "abrir program",
+            # Novas 30/09: leitura explícita arquivo
+            "ler o arquivo", "leia o arquivo", "lê o arquivo", "ler arquivo",
+            "leia arquivo", "lê arquivo", "mostra o arquivo", "explica o arquivo",
+            "analisa o arquivo", "abre o arquivo", "exibe o arquivo", "qual o conteúdo",
+            "pesquisa deadlock", "procura palavra", "pesquisa nos arquivos",
+            "lista só python", "lista só arquivos", "lista ordenado",
         ]
         if any(k in p for k in keywords_so):
             return "sistema_operacional"

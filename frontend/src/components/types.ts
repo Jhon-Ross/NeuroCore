@@ -46,13 +46,38 @@ export type PainelStatus = {
   vram: { online: boolean; total_gb: number; resumo: string };
   router: {
     modo_force_local: boolean;
-    openrouter_key_configurada: boolean;
+    providers_configurados?: Record<string, boolean>;
     teto_mensal_reais: number;
+    gasto_atual_mes_reais?: number;
+    pode_usar_api?: boolean;
   };
   especialistas: Record<
     string,
     { fase: number; is_loaded: boolean; modelo?: string }
   >;
+  // NOVO: Lista de providers para o dropdown do chat, já vem calculada do backend
+  // (inclui `disponivel: boolean` e `motivo_indisponivel` caso não tenha chave/teto=0)
+  providers_disponiveis?: ProviderOpcaoUI[];
+};
+
+// -------- Tipos de PROVIDER (Dropdown Seleção de Inferência) --------
+
+/** Valores válidos para o campo `provider` do request POST /api/chat.
+ *  Deve bater exatamente com core.api._PROVIDERS_VALIDOS. */
+export type ProviderValor = "auto" | "local" | "openrouter" | "anthropic" | "gemini";
+
+/** Estrutura de 1 item da lista `providers_disponiveis` que vem de GET /api/status.
+ *  O backend já calcula `disponivel` pra gente (se tem chave + teto > 0).
+ *  `undefined` = ainda não sabemos (fallback offline enquanto a API :8000 não deu a primeira resposta). */
+export type ProviderOpcaoUI = {
+  valor: ProviderValor;
+  label: string;
+  descricao: string;
+  custo_nominal_brl: number;
+  requer_chave: boolean;
+  env_var?: string;
+  disponivel: boolean | undefined;
+  motivo_indisponivel?: string;
 };
 
 // -------- Tipos adicionais do Launcher --------
@@ -94,4 +119,8 @@ export type MensagemChat = {
   modelo?: string;
   tokens?: number;
   xp?: number;
+  // NOVOS CAMPOS PROVIDER — preenchidos quando a resposta vem via API externa
+  provedor?: string;              // ex: "ollama", "anthropic", "openrouter", "gemini"
+  roteamento_motivo?: string;     // texto explicando o porquê da escolha (ex: "Usuário selecionou Anthropic")
+  custo_estimado_reais?: number;  // ex: 0.03 = R$ 0,03
 };
