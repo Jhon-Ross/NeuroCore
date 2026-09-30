@@ -259,6 +259,18 @@ class GerenciadorMemoria:
                 for r in rows
             ]
 
+    def contar_mensagens(self, session_id: int) -> int:
+        """Conta mensagens de uma sessão com 1 query COUNT(*) — O(1) vs O(n)."""
+        assert self._conn is not None
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
+
     # ------------------------------------------------------------------------
     # Amostras de treinamento
     # ------------------------------------------------------------------------

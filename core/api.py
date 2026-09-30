@@ -462,6 +462,7 @@ async def api_listar_sessoes(limite: int = 50) -> ListaSessoesResponse:
     """
     Lista as últimas N sessões de chat salvas no SQLite.
     Retorna id, título, data de criação/atualização e total de mensagens.
+    Usa COUNT(*) por sessão — query única O(1), sem carregar mensagens em memória.
     """
     try:
         sessoes_raw = orchestrator.memoria.listar_sessoes(limite=min(limite, 100))
@@ -469,18 +470,13 @@ async def api_listar_sessoes(limite: int = 50) -> ListaSessoesResponse:
         log.error("api_listar_sessoes_erro", {"erro": str(e)}, exception=e)
         raise HTTPException(status_code=500, detail="Erro ao listar sessões do SQLite.")
 
-    # Conta mensagens de cada sessão (em thread separada para não bloquear)
-    loop = asyncio.get_event_loop()
-
-    def _contar_msgs(session_id: int) -> int:
-        try:
-            return len(orchestrator.memoria.historico_sessao(session_id, limite_msg=1000))
-        except Exception:
-            return 0
-
+    # COUNT(*) é instantâneo no SQLite — sem necessidade de executor ou loop async
     itens: List[SessaoItem] = []
     for s in sessoes_raw:
-        total_msgs = await loop.run_in_executor(None, _contar_msgs, s["id"])
+        try:
+            total_msgs = orchestrator.memoria.contar_mensagens(s["id"])
+        except Exception:
+            total_msgs = 0
         itens.append(SessaoItem(
             id=s["id"],
             titulo=s["titulo"] or "Conversa sem título",
@@ -490,6 +486,7 @@ async def api_listar_sessoes(limite: int = 50) -> ListaSessoesResponse:
         ))
 
     return ListaSessoesResponse(sessoes=itens, total=len(itens))
+
 
 
 @app.get("/api/chat/sessions/{session_id}/messages", response_model=HistoricoSessaoResponse)

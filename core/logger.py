@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import sys
@@ -24,7 +25,7 @@ import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Deque, Dict, List, Literal, Optional
 
 # ----------------------------------------------------------------------------
 # RESOLUCAO DO CAMINHO (igual ao progress_rpg.py — fallback inteligente)
@@ -61,6 +62,42 @@ NIVEIS_NUMERICOS: Dict[NivelLog, int] = {
     "ERROR": 40,
     "CRITICAL": 50,
 }
+
+
+# ============================================================================
+# RING BUFFER — armazena os últimos N eventos em memória RAM
+# O WebSocket /ws/logs vai ler daqui sem tocar disco.
+# ============================================================================
+
+class LogRingBuffer:
+    """
+    Buffer circular thread-safe que guarda os últimos `maxlen` eventos de log.
+    Cada evento é um dict igual ao que vai para o arquivo JSONL.
+    Uso: log_buffer.snapshot() → lista dos últimos eventos (mais antigos primeiro).
+    """
+
+    def __init__(self, maxlen: int = 200) -> None:
+        self._buf: Deque[Dict[str, Any]] = collections.deque(maxlen=maxlen)
+        self._lock = threading.Lock()
+
+    def add(self, evento: Dict[str, Any]) -> None:
+        """Insere 1 evento (operação O(1), thread-safe)."""
+        with self._lock:
+            self._buf.append(evento)
+
+    def snapshot(self, limite: int = 200) -> List[Dict[str, Any]]:
+        """Retorna cópia dos últimos `limite` eventos (mais antigos primeiro)."""
+        with self._lock:
+            items = list(self._buf)
+        return items[-limite:] if limite < len(items) else items
+
+    def clear(self) -> None:
+        with self._lock:
+            self._buf.clear()
+
+
+# Singleton global — o WebSocket importa diretamente: from core.logger import log_buffer
+log_buffer: LogRingBuffer = LogRingBuffer(maxlen=200)
 
 
 # ============================================================================
@@ -160,7 +197,10 @@ class LoggerPrometeu:
             except Exception:
                 pass  # Printar falha de log nao pode quebrar o app
 
-        # 3. Escreve no arquivo JSON Lines (atomicamente com Lock)
+        # 3. Alimenta o ring buffer em memória (para WebSocket /ws/logs)
+        log_buffer.add(payload)
+
+        # 4. Escreve no arquivo JSON Lines (atomicamente com Lock)
         if nivel_num >= self.nivel_minimo_arquivo:
             with self._lock:
                 try:
