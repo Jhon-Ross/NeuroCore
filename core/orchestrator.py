@@ -25,8 +25,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -60,9 +63,16 @@ class EstadoGrafo(TypedDict, total=False):
     habilidade_alvo: str               # "cortex_geral", "codigo", etc
     historico_chat: List[Dict[str, str]]   # [{role,content}]
 
+    # --- NOVO CAMPOS SELECAO DE PROVIDER ---
+    override_provider: str | None          # "auto" / "local" / "anthropic" / "openrouter" / "gemini" / None
+    heuristica_escolha_automatica: bool    # True = Prometeu decide via keywords
+
     # Decisao do roteador
     roteamento_destino: str            # "local" / "api_ext"
     roteamento_modelo: str
+    roteamento_provedor: str           # "ollama" / "anthropic" / ...
+    roteamento_motivo: str             # mensagem de texto explicando a escolha (para UI)
+    custo_estimado_reais: float        # para UI exibir "resposta custou R$ X"
 
     # Inferencia
     resultado_inferencia: Optional[Dict[str, Any]]   # serializado ResultadoInferencia
@@ -166,10 +176,14 @@ class OrquestradorNeuroCore:
     def _node_rotear(self, estado: EstadoGrafo) -> Dict[str, Any]:
         """
         Passo 1: (a) heuristica HABILIDADE_ALVO por keywords, (b) Hybrid Router
-        decide LOCAL vs API + qual modelo local.
+        decide LOCAL vs API + qual modelo local + qual provider externo.
+
+        Agora aceita override_provider ("auto" / "local" / "anthropic" / etc
         """
         pergunta = estado.get("pergunta_usuario") or ""
         habilidade_pedida = estado.get("habilidade_alvo") or "cortex_geral"
+        override_provider: str | None = estado.get("override_provider")
+        heuristica_auto: bool = bool(estado.get("heuristica_escolha_automatica", False))
 
         # 1a. Se usuário pediu "cortex_geral" (default), descobrimos a habilidade via keywords
         #     (isso move a heurística do endpoint para DENTRO do core)
@@ -178,11 +192,256 @@ class OrquestradorNeuroCore:
         # Carrega lazy especialistas ainda não ativados (llm_code / os_control)
         self._carregar_especialista_se_preciso(habilidade)
 
-        decisao = self.router.decidir(habilidade_alvo=habilidade)
+        # 1b. Decisão do HybridRouter com os NOVOS parâmetros.
+        decisao = self.router.decidir(
+            habilidade_alvo=habilidade,
+            override_provider=override_provider,
+            heuristica_escolha_automatica=heuristica_auto,
+            texto_da_pergunta=pergunta,
+        )
         return {
             "habilidade_alvo": habilidade,
             "roteamento_destino": decisao.destino.value,
             "roteamento_modelo": decisao.modelo_usar,
+            "roteamento_provedor": decisao.provedor,
+            "roteamento_motivo": decisao.motivo,
+            "custo_estimado_reais": float(decisao.custo_estimado_reais or 0.0),
+        }
+
+    # ------------------------------------------------------------------
+    # CHAMADA HTTP REAL aos providers externos (Gemini / Anthropic / OpenRouter)
+    # Usado pelo _node_inferir quando HybridRouter decide API_EXTERNA.
+    # Qualquer exceção aqui é capturada no chamador e cai no fallback Ollama.
+    # ------------------------------------------------------------------
+    def _chamar_provider_externo(self,
+                                 provider: str,
+                                 modelo: str,
+                                 pergunta: str,
+                                 historico: List[Dict[str, Any]],
+                                 habilidade: str) -> Optional[Dict[str, Any]]:
+        """
+        Chama a API REST do provider desejado SEM SDK (apenas urllib padrão Python).
+
+        Retorna dict com {sucesso: bool, conteudo: str, tempo_ms: int, tokens_usados: int, modelo_usado: str}
+        ou None em caso de falha irrecuperável.
+        """
+        provider = (provider or "").strip().lower()
+        if provider == "gemini":
+            return self._chamar_gemini_rest(modelo, pergunta, historico, habilidade)
+        if provider == "anthropic":
+            return self._chamar_anthropic_rest(modelo, pergunta, historico, habilidade)
+        if provider == "openrouter":
+            return self._chamar_openrouter_rest(modelo, pergunta, historico, habilidade)
+        return None
+
+    def _montar_system_prompt_por_habilidade(self, habilidade: str) -> str:
+        """Retorna o system prompt correto para cada habilidade (igual ao bloco local)."""
+        SYSTEM_PROMPT_PROMETEU = (
+            "Você é Prometeu, o cérebro central do NeuroCore. Responde como um Engenheiro de Software Sênior "
+            "que conhece profundamente Rust, Python, Windows Internals e arquitetura de sistemas. "
+            "Seja sucinto, preciso e evite fluff. Priorize padrões de engenharia robustos."
+        )
+        if habilidade == "codigo":
+            return (
+                "Você é Prometeu, especialista em Engenharia de Software Sênior. "
+                "Gere código limpo, com type hints, sem try/except vazios, comentários em PT-BR. "
+                "Sempre explique o racional da solução em 1-2 linhas antes do bloco de código."
+            )
+        return SYSTEM_PROMPT_PROMETEU
+
+    @staticmethod
+    def _historico_para_gemini(historico: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Converte histórico formato NeuroCore {role, conteudo} para Gemini API {role, parts}."""
+        saida: List[Dict[str, Any]] = []
+        for msg in (historico or [])[-20:]:
+            role = msg.get("role")
+            texto = str(msg.get("conteudo") or msg.get("text") or "")
+            if not role or not texto:
+                continue
+            gemini_role = "user" if role == "user" else "model"
+            saida.append({"role": gemini_role, "parts": [{"text": texto}]})
+        return saida
+
+    def _chamar_gemini_rest(self, modelo: str, pergunta: str,
+                            historico: List[Dict[str, Any]],
+                            habilidade: str) -> Optional[Dict[str, Any]]:
+        """Chamada REST ao Google Generative Language (Gemini 3.5 Flash-Lite etc)."""
+        api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+        if not api_key:
+            return None
+        modelo = modelo or "gemini-3.5-flash-lite"
+        url = (
+            f"https://generativelanguage.googleapis.com/v1/models/{modelo}:generateContent"
+            f"?key={api_key}"
+        )
+        system_prompt = self._montar_system_prompt_por_habilidade(habilidade)
+        mensagens_historico = self._historico_para_gemini(historico)
+        body: Dict[str, Any] = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": mensagens_historico + [
+                {"role": "user", "parts": [{"text": pergunta}]}
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 4096,
+                "topP": 0.95,
+            },
+        }
+        t_inicio = time.perf_counter()
+        data_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data_bytes, method="POST",
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "NeuroCore/Prometeu"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=240) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            log.warn("gemini_rest_erro_http", {"erro": str(e)[:200], "modelo": modelo})
+            return None
+
+        tempo_ms = round((time.perf_counter() - t_inicio) * 1000, 2)
+        try:
+            obj = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            return None
+        try:
+            texto_resp = obj["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError):
+            return None
+        u = obj.get("usageMetadata") or {}
+        tokens_total = int(u.get("totalTokenCount", u.get("promptTokenCount", 0) + u.get("candidatesTokenCount", 0)))
+        return {
+            "sucesso": True,
+            "conteudo": texto_resp,
+            "tempo_ms": tempo_ms,
+            "tokens_usados": tokens_total,
+            "modelo_usado": obj.get("modelVersion") or modelo,
+        }
+
+    @staticmethod
+    def _historico_para_chatml(historico: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """Converte NeuroCore {role, conteudo} para formato chat/completions (Anthropic/OpenRouter/OpenAI)."""
+        saida: List[Dict[str, str]] = []
+        for msg in (historico or [])[-20:]:
+            role = msg.get("role")
+            texto = str(msg.get("conteudo") or msg.get("text") or "")
+            if not role or not texto:
+                continue
+            chat_role = "user" if role == "user" else "assistant"
+            saida.append({"role": chat_role, "content": texto})
+        return saida
+
+    def _chamar_anthropic_rest(self, modelo: str, pergunta: str,
+                               historico: List[Dict[str, Any]],
+                               habilidade: str) -> Optional[Dict[str, Any]]:
+        """Chamada REST direta à Anthropic Messages API (Claude)."""
+        api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+        if not api_key:
+            return None
+        modelo = modelo or "claude-3-5-sonnet-20241022"
+        system_prompt = self._montar_system_prompt_por_habilidade(habilidade)
+        mensagens = self._historico_para_chatml(historico) + [{"role": "user", "content": pergunta}]
+        body = {
+            "model": modelo,
+            "system": system_prompt,
+            "messages": mensagens,
+            "max_tokens": 4096,
+            "temperature": 0.2,
+        }
+        data_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=data_bytes, method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        t_inicio = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=240) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            log.warn("anthropic_rest_erro_http", {"erro": str(e)[:200]})
+            return None
+        tempo_ms = round((time.perf_counter() - t_inicio) * 1000, 2)
+        try:
+            obj = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            return None
+        try:
+            bloco_texto = obj["content"][0]
+            texto_resp = bloco_texto.get("text") or str(bloco_texto)
+        except (KeyError, IndexError, TypeError):
+            return None
+        u = obj.get("usage") or {}
+        tokens_total = int(u.get("input_tokens", 0)) + int(u.get("output_tokens", 0))
+        return {
+            "sucesso": True,
+            "conteudo": texto_resp,
+            "tempo_ms": tempo_ms,
+            "tokens_usados": tokens_total,
+            "modelo_usado": obj.get("model") or modelo,
+        }
+
+    def _chamar_openrouter_rest(self, modelo: str, pergunta: str,
+                                historico: List[Dict[str, Any]],
+                                habilidade: str) -> Optional[Dict[str, Any]]:
+        """Chamada REST ao OpenRouter Aggregador (formato chat/completions OpenAI)."""
+        api_key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+        if not api_key:
+            return None
+        modelo = modelo or "anthropic/claude-sonnet-4o"
+        system_prompt = self._montar_system_prompt_por_habilidade(habilidade)
+        mensagens = (
+            [{"role": "system", "content": system_prompt}] +
+            self._historico_para_chatml(historico) +
+            [{"role": "user", "content": pergunta}]
+        )
+        body = {
+            "model": modelo,
+            "messages": mensagens,
+            "temperature": 0.2,
+            "max_tokens": 4096,
+        }
+        data_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=data_bytes, method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://neurocore.local",
+                "X-Title": "NeuroCore Prometeu",
+            },
+        )
+        t_inicio = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=240) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            log.warn("openrouter_rest_erro_http", {"erro": str(e)[:200]})
+            return None
+        tempo_ms = round((time.perf_counter() - t_inicio) * 1000, 2)
+        try:
+            obj = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            return None
+        try:
+            texto_resp = obj["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return None
+        u = obj.get("usage") or {}
+        tokens_total = int(u.get("total_tokens", 0)) or int(u.get("prompt_tokens", 0) + u.get("completion_tokens", 0))
+        return {
+            "sucesso": True,
+            "conteudo": texto_resp,
+            "tempo_ms": tempo_ms,
+            "tokens_usados": tokens_total,
+            "modelo_usado": obj.get("model") or modelo,
         }
 
     @staticmethod
@@ -198,10 +457,44 @@ class OrquestradorNeuroCore:
         if not p:
             return habilidade_padrao or "cortex_geral"
 
-        # ---- SISTEMA OPERACIONAL (detecção ANTES de código, evitar falso-positivo) ----
+        # ---- PRIORIDADE 1: CÓDIGO (criação de código, funções, scripts, python) ----
+        # REGRA DE OURO: se a intenção é CRIAR/GERAR/DESENVOLVER → sempre llm_code.
+        # Nunca confunda "crie uma calculadora" com "abre calc.exe".
+        indicadores_codigo_prioritarios = [
+            # verbos de criação / geração
+            "crie", "criar", "cria", "desenvolva", "desenvolver", "implemente", "implementar",
+            "faça", "faca", "faz", "gere", "gera", "gerar", "construa", "construir", "monte",
+            "faça um código", "faca um codigo", "escreva", "escreva um código", "escreva um codigo",
+            "me dê", "me de", "me mostra", "me mostre",
+            # entidades de código
+            "função", "funcao", "classe", "metodo", "método", "algoritmo", "lógica", "logica",
+            "script", "código", "codigo", "programa",
+            # apps / interfaces (tkinter e similares)
+            "calculadora", "calculator", "aplicativo", "aplicação", "aplicacao", "app",
+            "janela", "interface", "gui", "tkinter", "pyqt", "widget",
+            "jogo", "game", "formulário", "formulario", "tela",
+            # linguagens
+            "em python", "em javascript", "em typescript", "em rust", "em node",
+            "em bash", "em shell", "em powershell", "em sql", "em html", "em css",
+            "python puro", "python nativo", "usando python", "com python",
+            "tkinter nativo", "com tkinter",
+            # outros
+            "função recursiva", "código python", "codigo python",
+            "typescript", "javascript", "sql", "bash", "rust", "node.js",
+        ]
+        pede_codigo = any(k in p for k in indicadores_codigo_prioritarios)
+        # Exceção: pedidos de "abrir/abre" algo + nome de app conhecido = SO, não código
+        pede_abrir_direto = bool(re.match(
+            r"^(abre|abrir|inicia|iniciar|start|executa|executar|roda|rodando)\b",
+            p.strip()
+        ))
+        if pede_codigo and not pede_abrir_direto and not any(k in p for k in ["cria arquivo", "criar arquivo", "novo arquivo"]):
+            return "codigo"
+
+        # ---- SISTEMA OPERACIONAL (apenas se for comando direto de abrir/executar) ----
         # Frases do tipo: [abre/inicia/roda o X ...] para programas conhecidos
         if (re.match(r"^(abre|abrir|inicia|iniciar|start|executa|executar|roda)\b.*\b(notepad|bloco\s+de\s+notas|calculadora|calc|chrome|edge|vscode|vs\s+code|code|explorer|arquivos|terminal|cmd|powershell)\b", p)
-            or re.search(r"\b(notepad|bloco\s+de\s+notas|calculadora|calc|chrome|edge|vscode|vs\s+code|explorer|arquivos|terminal|cmd|powershell)\b.*(por\s+favor|pra\s+mim|pfv|pls|sff|por gentileza)", p)):
+            or re.search(r"\b(abre|abrir|inicia|iniciar|executa|executar|roda)\s+(o\s+|a\s+)?(notepad|bloco\s+de\s+notas|calculadora|calc|chrome|edge|vscode|vs\s+code|explorer|arquivos|terminal|cmd|powershell)\b", p)):
             return "sistema_operacional"
 
         keywords_so = [
@@ -255,12 +548,69 @@ class OrquestradorNeuroCore:
                          {"especialista": nome_esp, "erro": str(e)})
 
     def _node_inferir(self, estado: EstadoGrafo) -> Dict[str, Any]:
-        """Passo 2: chama o especialista via BaseSpecialist.infer() com kwargs específicos."""
+        """Passo 2: chama o especialista via BaseSpecialist.infer() OU provider externo via HTTP REST.
+
+        Prioridade:
+          1. Se HybridRouter escolheu PROVIDER EXTERNO (gemini / anthropic / openrouter)
+             e o destino = API_EXTERNA, tenta a chamada REST primeiro.
+          2. QUALQUER falha (rede, billing, chave inválida, timeout) → log warn silencioso
+             e cai AUTOMATICAMENTE no especialista Ollama LOCAL (fallback resiliente, nunca quebra).
+        """
         t0 = time.perf_counter()
 
         habilidade = estado.get("habilidade_alvo") or "cortex_geral"
         pergunta = estado.get("pergunta_usuario") or ""
         hist = estado.get("historico_chat") or []
+
+        # ------------------------------------------------------------------
+        # NOVO: BLOCO DE PROVIDERS EXTERNOS via HTTP REST.
+        # Se o HybridRouter decidiu ir pra API_EXTERNA, primeiro tentamos a chamada
+        # ao provider real. Qualquer problema → cai no fallback Ollama local abaixo.
+        # ------------------------------------------------------------------
+        roteamento_provedor = (estado.get("roteamento_provedor") or "").lower().strip()
+        roteamento_destino = (estado.get("roteamento_destino") or "").lower().strip()
+        modelo_alvo = (estado.get("roteamento_modelo") or "").strip()
+
+        if roteamento_destino == RoteamentoDestino.API_EXTERNA.value and \
+           roteamento_provedor in {"gemini", "anthropic", "openrouter"}:
+            try:
+                resultado_ext = self._chamar_provider_externo(
+                    provider=roteamento_provedor,
+                    modelo=modelo_alvo,
+                    pergunta=pergunta,
+                    historico=hist,
+                    habilidade=habilidade,
+                )
+                if resultado_ext and resultado_ext.get("sucesso"):
+                    tempo_total = round((time.perf_counter() - t0) * 1000, 2)
+                    return {
+                        "resultado_inferencia": {
+                            "sucesso": True,
+                            "conteudo": resultado_ext["conteudo"],
+                            "erro_mensagem": None,
+                            "erro_tecnico": None,
+                            "tempo_ms": resultado_ext.get("tempo_ms", tempo_total),
+                            "tokens_usados": int(resultado_ext.get("tokens_usados", 0)),
+                            "modelo_usado": resultado_ext.get("modelo_usado") or modelo_alvo,
+                            "metadados": {"origem": "api_externa", "provider": roteamento_provedor},
+                            "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                            "especialista": "llm_core",
+                            "habilidade": habilidade,
+                        },
+                        "resposta_texto": str(resultado_ext["conteudo"]),
+                        "sucesso": True,
+                        "tempo_total_ms": tempo_total,
+                    }
+            except Exception as e:  # noqa: BLE001 — fallback para local é a regra aqui
+                log.warn("orquestrador_provider_externo_falhou_caindo_local",
+                         {"provider": roteamento_provedor, "erro": str(e)[:200]})
+
+        # ------------------------------------------------------------------
+        # FIM BLOCO PROVIDERS EXTERNOS.
+        # Fallback PADRÃO (e caminho normal padrão = SEMPRE LOCAL):
+        # usa o especialista llm_core / llm_code via BaseSpecialist.infer()
+        # com Ollama na RX 7600.
+        # ------------------------------------------------------------------
 
         # Mapeamento habilidade → nome do especialista
         mapa_hab_especialista = {
@@ -411,10 +761,23 @@ class OrquestradorNeuroCore:
         pergunta: str,
         session_id: Optional[int] = None,
         habilidade_alvo: str = "cortex_geral",
+        override_provider: Optional[str] = None,
+        heuristica_escolha_automatica: bool = True,
     ) -> Dict[str, Any]:
         """
         Função de entrada UNICA para processar 1 mensagem do usuário.
         Faz TODO o ciclo: rotear → inferir → salvar → XP.
+
+        Args:
+            override_provider:
+                None  → Comportamento atual (hoje: força heurística).
+                "auto" → Prometeu decide por heurística (recomendado padrão UI).
+                "local" → OLLAMA RX 7600 SEMPRE. Ignora chaves existentes.
+                "anthropic" / "openrouter" / "gemini" → força provider específico.
+            heuristica_escolha_automatica:
+                Quando True E override_provider != "local", usa a heurística de
+                keywords (tarefa complexa → Anthropic se valer a pena).
+                Default: True. Desligue apenas se quiser provar que vai sempre pra LOCAL.
         """
         if not pergunta or not pergunta.strip():
             return {
@@ -425,6 +788,9 @@ class OrquestradorNeuroCore:
                 ),
                 "tempo_total_ms": 0.0,
                 "xp_ganho": 0,
+                "roteamento_provedor": "ollama",
+                "roteamento_motivo": "Pergunta vazia, sem roteamento.",
+                "custo_estimado_reais": 0.0,
             }
 
         # Cria sessao se o usuário não passou uma
@@ -441,12 +807,18 @@ class OrquestradorNeuroCore:
             if m["role"] in ("user", "assistant")
         ]
 
+        # Normaliza override_provider: se for None e True heuristica → "auto"
+        if override_provider is None and heuristica_escolha_automatica:
+            override_provider = "auto"
+
         # Monta o estado inicial do grafo
         estado_inicial: EstadoGrafo = {
             "pergunta_usuario": pergunta.strip(),
             "session_id": session_id,
             "habilidade_alvo": habilidade_alvo,
             "historico_chat": historico,
+            "override_provider": override_provider,
+            "heuristica_escolha_automatica": bool(heuristica_escolha_automatica),
         }
 
         # Roda o grafo
@@ -465,6 +837,9 @@ class OrquestradorNeuroCore:
             "tempo_total_ms": final.get("tempo_total_ms", 0.0),
             "xp_ganho": final.get("xp_ganho", 0),
             "roteamento_destino": final.get("roteamento_destino"),
+            "roteamento_provedor": final.get("roteamento_provedor"),
+            "roteamento_motivo": final.get("roteamento_motivo", ""),
+            "custo_estimado_reais": float(final.get("custo_estimado_reais") or 0.0),
             "habilidade_alvo": habilidade_resolvida,
             "modelo_usado": (final.get("resultado_inferencia") or {}).get("modelo_usado"),
             "tokens_usados": (final.get("resultado_inferencia") or {}).get("tokens_usados", 0),
