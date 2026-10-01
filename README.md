@@ -1,11 +1,11 @@
 # 🏛️ NeuroCore · Plataforma Base de IA Unificada · O Projeto Prometeu
 
-> 🧠 **Um núcleo open-source de IA local. Uma base para tudo — do assistente residencial ao cérebro de robôs humanóides no longo prazo.**
+> **Um núcleo open-source de IA local. Uma base para tudo — do assistente residencial ao cérebro de robôs humanóides no longo prazo.**
 
 <p align="center">
-  <img src="https://img.shields.io/badge/M1_SKELETON-FUNCIONANDO_%C2%B7_30%2FSET-F59E0B?style=for-the-badge&labelColor=07070A" alt="Status: M1 SKELETON Funcionando · 30/SET"/>
-  <img src="https://img.shields.io/badge/Python_3_12_%C2%B7_FastAPI_%C2%B7_Next_14_%C2%B7_Ollama_%C2%B7_Tauri_v2-3776AB?style=for-the-badge&labelColor=07070A" alt="Tech"/>
-  <img src="https://img.shields.io/badge/XP_%F0%9F%93%8A-575_Global_%C2%B7_8_Marcos-F59E0B?style=for-the-badge&labelColor=07070A" alt="XP"/>
+  <img src="https://img.shields.io/badge/Status-M1_SKELETON_FUNCIONANDO_%7C_30%2FSET-F59E0B?style=for-the-badge&labelColor=07070A" alt="Status: M1 SKELETON Funcionando | 30/SET"/>
+  <img src="https://img.shields.io/badge/Tech-100%25_Local-3776AB?style=for-the-badge&labelColor=07070A" alt="Tecnologias: Python · FastAPI · Next.js · Ollama · Tauri"/>
+  <img src="https://img.shields.io/badge/Progresso-575_XP_%7C_8_Marcos-F59E0B?style=for-the-badge&labelColor=07070A" alt="XP Global 575 · 8 Marcos Concluídos"/>
   <img src="https://img.shields.io/github/last-commit/Jhon-Ross/NeuroCore?style=for-the-badge&labelColor=07070A&color=F59E0B" alt="Último Commit"/>
   <img src="https://img.shields.io/badge/License-MIT-10B981?style=for-the-badge&labelColor=07070A" alt="Licença MIT"/>
 </p>
@@ -170,9 +170,9 @@ A interface abre automaticamente no seu navegador padrão: `http://localhost:300
 
 <p align="center">
   <br/>
-  <img alt="GitHub Stars" src="https://img.shields.io/github/stars/Jhon-Ross/NeuroCore?style=for-the-badge&logo=star&labelColor=07070A&color=F59E0B"/>
-  <img alt="Último Commit" src="https://img.shields.io/github/last-commit/Jhon-Ross/NeuroCore?style=for-the-badge&labelColor=07070A&color=F59E0B"/>
-  <img alt="Tamanho do repositório" src="https://img.shields.io/github/repo-size/Jhon-Ross/NeuroCore?style=for-the-badge&labelColor=07070A&color=F59E0B"/>
+  <img alt="GitHub Stars" src="https://img.shields.io/github/stars/Jhon-Ross/NeuroCore?style=for-the-badge&label=Estrelas&labelColor=07070A&color=F59E0B"/>
+  <img alt="Último Commit" src="https://img.shields.io/github/last-commit/Jhon-Ross/NeuroCore?style=for-the-badge&label=Ultimo_Commit&labelColor=07070A&color=F59E0B"/>
+  <img alt="Tamanho do repositório" src="https://img.shields.io/github/repo-size/Jhon-Ross/NeuroCore?style=for-the-badge&label=Tamanho&labelColor=07070A&color=F59E0B"/>
   <br/><br/>
   <strong>Código Aberto · MIT · Zero dados enviados por padrão · 100% Local.</strong>
   <br/><br/>
